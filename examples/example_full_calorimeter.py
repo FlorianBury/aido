@@ -70,7 +70,7 @@ if __name__ == "__main__":
     ui_interface.container_extra_flags = ""
     #ui_interface.container_extra_flags = "-B /work,/ceph"
     ui_interface.verbose = True
-    results_dir: str = "/cephfs/dice/users/lw23382/aido"
+    results_dir: str = "/cephfs/dice/users/lw23382/aido_v1"
 
     parameters = aido.SimulationParameterDictionary([
         aido.SimulationParameter("thickness_absorber_0", 9.030052185058594, min_value=min_value, sigma=sigma),
@@ -121,16 +121,20 @@ if __name__ == "__main__":
             cost=[2500.0, 0.01],
             probabilities=[0.01, 0.99]
         ),
-        aido.SimulationParameter("num_events", 400, optimizable=False),
         aido.SimulationParameter("max_length", 200, optimizable=False),
         aido.SimulationParameter("max_cost", 200_000, optimizable=False),
+        aido.SimulationParameter("num_events", 10, optimizable=False),
+        aido.SimulationParameter("N_max_gamma", 5, optimizable=False),
+        aido.SimulationParameter("N_max_pion", 5, optimizable=False),
+        aido.SimulationParameter("minEnergy_GeV", 1., optimizable=False),
+        aido.SimulationParameter("maxEnergy_GeV", 20., optimizable=False),
     ])
     aido.optimize(
         parameters=parameters,
         user_interface=ui_interface,
-        simulation_tasks=10, #20,
-        max_iterations=50, #220,
-        threads=10, #20,
+        simulation_tasks=20,
+        max_iterations=300,
+        threads=20,
         results_dir=results_dir,
         description="""
 Optimization of a sampling calorimeter with cost and length constraints.

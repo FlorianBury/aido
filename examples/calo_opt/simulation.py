@@ -1,6 +1,8 @@
 import json
 import os
 import sys
+import random
+import itertools
 
 import numpy as np
 import pandas as pd
@@ -15,9 +17,33 @@ class Simulation():
         self.parameter_dict = parameter_dict
 
         if "num_events" in parameter_dict:
-            self.n_events_per_var = parameter_dict["num_events"]["current_value"]
+            self.n_events = parameter_dict["num_events"]["current_value"]
         else:
-            self.n_events_per_var = 100
+            self.n_events = 100
+        if "N_max_gamma" in parameter_dict:
+            self.N_max_gamma = parameter_dict["N_max_gamma"]["current_value"]
+        else:
+            self.N_max_gamma = 1
+        if "N_max_pion" in parameter_dict:
+            self.N_max_pion = parameter_dict["N_max_pion"]["current_value"]
+        else:
+            self.N_min_pion = 1
+        if "N_min_gamma" in parameter_dict:
+            self.N_min_gamma = parameter_dict["N_min_gamma"]["current_value"]
+        else:
+            self.N_min_gamma = 0
+        if "N_min_pion" in parameter_dict:
+            self.N_min_pion = parameter_dict["N_min_pion"]["current_value"]
+        else:
+            self.N_min_pion = 0
+        if "minEnergy_GeV" in parameter_dict:
+            self.minEnergy_GeV = max(1e-3,parameter_dict["minEnergy_GeV"]["current_value"])
+        else:
+            self.minEnergy_GeV = 1.
+        if "maxEnergy_GeV" in parameter_dict:
+            self.maxEnergy_GeV = max(self.minEnergy_GeV,parameter_dict["maxEnergy_GeV"]["current_value"])
+        else:
+            self.maxEnergy_GeV = min(self.minEnergy_GeV,20.)
 
         self.cw = GeometryDescriptor()
 
@@ -38,19 +64,26 @@ class Simulation():
     def run_simulation(self) -> pd.DataFrame:
         dfs = []
         particles = {"pi+": 0.211, "gamma": 0.22}
-
-        for particle in particles.items():
-            name, pid = particle
+        rng = np.random.default_rng(seed=self.parameter_dict["metadata"]["rng_seed"])
+        for i,(Ng,Np) in enumerate(
+                itertools.product(
+                    np.arange(self.N_max_gamma),
+                    np.arange(self.N_max_pion),
+                )
+        ):
+            if Ng+Np == 0:
+                continue
             df: pd.DataFrame = run_batch(
                 gd=self.cw,
-                nEvents=int(self.n_events_per_var / len(particles)),
-                particleSpec=name,
-                minEnergy_GeV=1.,
-                maxEnergy_GeV=20.,
+                nEvents=self.n_events,
+                particleSpec=['gamma']*Ng+['pi+']*Np,
+                minEnergy_GeV=self.minEnergy_GeV*(Ng+Np),
+                maxEnergy_GeV=self.maxEnergy_GeV*(Ng+Np),
                 no_mp=True,
-                manual_seed=self.parameter_dict["metadata"]["rng_seed"]
+                manual_seed=self.parameter_dict["metadata"]["rng_seed"]+i,
             )
-            df = df.assign(true_pid=np.full(len(df), pid, dtype='float32'))
+            df = df.assign(N_gamma=np.full(len(df), Ng, dtype='float32'))
+            df = df.assign(N_pion=np.full(len(df), Np, dtype='float32'))
             dfs.append(df)
 
         return pd.concat(dfs, axis=0, ignore_index=True)
