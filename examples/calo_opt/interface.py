@@ -111,7 +111,7 @@ class CaloOptInterface(aido.UserInterfaceBase):
                         'sensor_dx', 'sensor_dy', 'sensor_dz', 'sensor_layer'
                     ],
                     target_keys=["true_energy"],
-                    context_keys=["true_pid"]
+                    context_keys=["N_gamma","N_pion"],
                 )
             )
 
