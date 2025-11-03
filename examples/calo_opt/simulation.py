@@ -7,7 +7,7 @@ import itertools
 import numpy as np
 import pandas as pd
 from G4Calo import GeometryDescriptor, run_batch
-
+from minipandas import MiniFrame,concat
 
 class Simulation():
     def __init__(
@@ -62,9 +62,10 @@ class Simulation():
             )
 
     def run_simulation(self) -> pd.DataFrame:
-        dfs = []
-        particles = {"pi+": 0.211, "gamma": 0.22}
+        mfs = []
         rng = np.random.default_rng(seed=self.parameter_dict["metadata"]["rng_seed"])
+        N_gammas = []
+        N_pions = []
         for i,(Ng,Np) in enumerate(
                 itertools.product(
                     np.arange(self.N_max_gamma),
@@ -73,7 +74,7 @@ class Simulation():
         ):
             if Ng+Np == 0:
                 continue
-            df: pd.DataFrame = run_batch(
+            mf: MiniFrame = run_batch(
                 gd=self.cw,
                 nEvents=self.n_events,
                 particleSpec=['gamma']*Ng+['pi+']*Np,
@@ -82,11 +83,13 @@ class Simulation():
                 no_mp=True,
                 manual_seed=self.parameter_dict["metadata"]["rng_seed"]+i,
             )
-            df = df.assign(N_gamma=np.full(len(df), Ng, dtype='float32'))
-            df = df.assign(N_pion=np.full(len(df), Np, dtype='float32'))
-            dfs.append(df)
-
-        return pd.concat(dfs, axis=0, ignore_index=True)
+            N_gammas.append(np.full(len(mf),Ng,dtype='float32'))
+            N_pions.append(np.full(len(mf),Np,dtype='float32'))
+            mfs.append(mf)
+        df = concat(mfs, axis=0, ignore_index=True).to_pandas(indiv_cols=False)
+        df = df.assign(N_gamma=np.concatenate(N_gammas,axis=0))
+        df = df.assign(N_pion=np.concatenate(N_pions,axis=0))
+        return df
 
 
 if __name__ == "__main__":

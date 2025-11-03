@@ -66,11 +66,11 @@ if __name__ == "__main__":
     min_value: float = 0.0
 
     ui_interface = UIFullCalorimeter()
-    ui_interface.container_path = "/software/lw23382/AIDO/minicalosim_7829fde_2.sif"
+    ui_interface.container_path = "/cephfs/dice/users/lw23382/sif/minicalosim_90baa21.sif"
     ui_interface.container_extra_flags = ""
     #ui_interface.container_extra_flags = "-B /work,/ceph"
     ui_interface.verbose = True
-    results_dir: str = "/cephfs/dice/users/lw23382/aido_v1"
+    results_dir: str = "/cephfs/dice/users/lw23382/aido_v3"
 
     parameters = aido.SimulationParameterDictionary([
         aido.SimulationParameter("thickness_absorber_0", 9.030052185058594, min_value=min_value, sigma=sigma),
@@ -123,9 +123,12 @@ if __name__ == "__main__":
         ),
         aido.SimulationParameter("max_length", 200, optimizable=False),
         aido.SimulationParameter("max_cost", 200_000, optimizable=False),
-        aido.SimulationParameter("num_events", 10, optimizable=False),
+        aido.SimulationParameter("num_events", 20, optimizable=False),
+            # num_events is now per batch of N_gamma and N_pion
         aido.SimulationParameter("N_max_gamma", 5, optimizable=False),
+            # Will use up to 5 gammas per batch (N_min_gamma = 0 if unspecified)
         aido.SimulationParameter("N_max_pion", 5, optimizable=False),
+            # Same as gammas
         aido.SimulationParameter("minEnergy_GeV", 1., optimizable=False),
         aido.SimulationParameter("maxEnergy_GeV", 20., optimizable=False),
     ])
