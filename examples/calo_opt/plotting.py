@@ -124,7 +124,7 @@ class CaloOptPlotting:
             sampled_iterations = [0, 10, 20, 200]
             cmap = plt.get_cmap('coolwarm', len(sampled_iterations))
             fig, ax = plt.subplots()
-            bins = np.linspace(-5, 5, 100 + 1)
+            bins = np.linspace(-10, 10, 100 + 1)
 
             for file_name in self.reco_output_paths:
                 iteration = int(re.search(r"iteration=(\d+)", file_name).group(1))
@@ -153,7 +153,7 @@ class CaloOptPlotting:
             fig, ax = plt.subplots()
             ax = self.add_plot_header(ax)
             cmap = plt.get_cmap('coolwarm', len(self.reco_output_paths))
-            bins = np.linspace(-20, 20, 80 + 1)
+            bins = np.linspace(-50, 50, 100 + 1)
 
             for file_name in self.reco_output_paths:
                 iteration = int(re.search(r"iteration=(\d+)", file_name).group(1))
@@ -171,7 +171,7 @@ class CaloOptPlotting:
                     ax = aido.Plotting.FWHM(bins, e_rec_binned).add_to_axis(ax)
 
             plt.legend()
-            plt.xlim(-10, 10)
+            plt.xlim(-50, 50)
             plt.xlabel(r"Energy Resolution $E_{\text{true}} - E_{\text{rec}}$ [GeV]")
             plt.ylabel(f"Counts {(bins[1] - bins[0]):.2f}")
             plt.savefig(os.path.join(self.results_dir, "plots/energy_resolution_first_and_last"))
@@ -299,7 +299,7 @@ class CaloOptPlotting:
             plt.tight_layout()
             plt.savefig(os.path.join(self.results_dir, "plots/energy_resolution_evolution.pdf"))
             plt.close()
-        
+
         def plot_constraints() -> None:
             def cost(parameter_dict: aido.SimulationParameterDictionary) -> float:
                 cost = 0.0

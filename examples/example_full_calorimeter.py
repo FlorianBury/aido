@@ -123,12 +123,29 @@ if __name__ == "__main__":
         ),
         aido.SimulationParameter("max_length", 200, optimizable=False),
         aido.SimulationParameter("max_cost", 200_000, optimizable=False),
-        aido.SimulationParameter("num_events", 20, optimizable=False),
-            # num_events is now per batch of N_gamma and N_pion
-        aido.SimulationParameter("N_max_gamma", 5, optimizable=False),
-            # Will use up to 5 gammas per batch (N_min_gamma = 0 if unspecified)
-        aido.SimulationParameter("N_max_pion", 5, optimizable=False),
-            # Same as gammas
+        aido.SimulationParameter("num_events", 10, optimizable=False),
+            # num_events is now per batch of a set of number of particles
+        aido.SimulationParameter(
+            name = "N:pi+",
+            starting_value = 0,
+            min_value = 0,
+            max_value = 3,
+            optimizable = False,
+        ),
+        aido.SimulationParameter(
+            name = "N:pi-",
+            starting_value = 0,
+            min_value = 0,
+            max_value = 3,
+            optimizable = False,
+        ),
+        aido.SimulationParameter(
+            name = "N:gamma",
+            starting_value = 0,
+            min_value = 0,
+            max_value = 5,
+            optimizable = False,
+        ),
         aido.SimulationParameter("minEnergy_GeV", 1., optimizable=False),
         aido.SimulationParameter("maxEnergy_GeV", 20., optimizable=False),
     ])

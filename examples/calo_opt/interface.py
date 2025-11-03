@@ -1,4 +1,5 @@
 import os
+import re
 from typing import Dict, Iterable, List
 
 import pandas as pd
@@ -57,6 +58,15 @@ class CaloOptInterface(aido.UserInterfaceBase):
             pd.DataFrame:A DataFrame containing the simulation parameter list, input features, and
             target features, context features.
         """
+        def wildcard_to_regex(pattern):
+            regex = re.escape(pattern)
+            regex = regex.replace(r'\*', '.*').replace(r'\?', '.')
+            return f'^{regex}$'
+
+        def expand_keys(keys,colums):
+            regex = re.compile("|".join(wildcard_to_regex(key) for key in keys))
+            return [col for col in columns if regex.match(col)]
+
 
         def expand_columns(df: pd.DataFrame) -> pd.DataFrame:
             """ Check if columns in df are lists and flatten them by replacing those
@@ -75,14 +85,15 @@ class CaloOptInterface(aido.UserInterfaceBase):
 
         if isinstance(simulation_output_df, str):
             input_df: pd.DataFrame = pd.read_parquet(simulation_output_df)
+        columns = input_df.columns
 
         parameter_dict = aido.SimulationParameterDictionary.from_json(parameter_dict_path)
 
         df_combined_dict = {
             "Parameters": parameter_dict.to_df(len(input_df), display_discrete="as_one_hot"),
-            "Inputs": expand_columns(input_df[input_keys]),
-            "Targets": expand_columns(input_df[target_keys]),
-            "Context": expand_columns(input_df[context_keys])
+            "Inputs": expand_columns(input_df[expand_keys(input_keys,columns)]),
+            "Targets": expand_columns(input_df[expand_keys(target_keys,columns)]),
+            "Context": expand_columns(input_df[expand_keys(context_keys,columns)])
         }
         df: pd.DataFrame = pd.concat(
             df_combined_dict.values(),
@@ -111,7 +122,7 @@ class CaloOptInterface(aido.UserInterfaceBase):
                         'sensor_dx', 'sensor_dy', 'sensor_dz', 'sensor_layer'
                     ],
                     target_keys=["true_energy"],
-                    context_keys=["N_gamma","N_pion"],
+                    context_keys=['N:*'],
                 )
             )
 

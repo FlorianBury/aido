@@ -20,22 +20,6 @@ class Simulation():
             self.n_events = parameter_dict["num_events"]["current_value"]
         else:
             self.n_events = 100
-        if "N_max_gamma" in parameter_dict:
-            self.N_max_gamma = parameter_dict["N_max_gamma"]["current_value"]
-        else:
-            self.N_max_gamma = 1
-        if "N_max_pion" in parameter_dict:
-            self.N_max_pion = parameter_dict["N_max_pion"]["current_value"]
-        else:
-            self.N_min_pion = 1
-        if "N_min_gamma" in parameter_dict:
-            self.N_min_gamma = parameter_dict["N_min_gamma"]["current_value"]
-        else:
-            self.N_min_gamma = 0
-        if "N_min_pion" in parameter_dict:
-            self.N_min_pion = parameter_dict["N_min_pion"]["current_value"]
-        else:
-            self.N_min_pion = 0
         if "minEnergy_GeV" in parameter_dict:
             self.minEnergy_GeV = max(1e-3,parameter_dict["minEnergy_GeV"]["current_value"])
         else:
@@ -44,6 +28,11 @@ class Simulation():
             self.maxEnergy_GeV = max(self.minEnergy_GeV,parameter_dict["maxEnergy_GeV"]["current_value"])
         else:
             self.maxEnergy_GeV = min(self.minEnergy_GeV,20.)
+        self.part_numbers = {}
+        for key,config in parameter_dict.items():
+            if key.startswith('N:'):
+                self.part_numbers[key.replace('N:','')] = np.arange(config['min_value'],config['max_value'])
+        assert len(self.part_numbers) > 0
 
         self.cw = GeometryDescriptor()
 
@@ -63,32 +52,28 @@ class Simulation():
 
     def run_simulation(self) -> pd.DataFrame:
         mfs = []
-        rng = np.random.default_rng(seed=self.parameter_dict["metadata"]["rng_seed"])
-        N_gammas = []
-        N_pions = []
-        for i,(Ng,Np) in enumerate(
-                itertools.product(
-                    np.arange(self.N_max_gamma),
-                    np.arange(self.N_max_pion),
-                )
-        ):
-            if Ng+Np == 0:
+        N_counts = [[] for _ in range(len(self.part_numbers))]
+        names = list(self.part_numbers.keys())
+        for i,Ns in enumerate(itertools.product(*self.part_numbers.values())):
+            if sum(Ns) == 0:
                 continue
+            parts = [name for name,N in zip(names,Ns) for _ in range(N)]
+            print (f'Particles used in G4Calo : {parts} ({self.n_events} events)')
             mf: MiniFrame = run_batch(
                 gd=self.cw,
                 nEvents=self.n_events,
-                particleSpec=['gamma']*Ng+['pi+']*Np,
-                minEnergy_GeV=self.minEnergy_GeV*(Ng+Np),
-                maxEnergy_GeV=self.maxEnergy_GeV*(Ng+Np),
+                particleSpec=parts,
+                minEnergy_GeV=self.minEnergy_GeV*sum(Ns),
+                maxEnergy_GeV=self.maxEnergy_GeV*sum(Ns),
                 no_mp=True,
                 manual_seed=self.parameter_dict["metadata"]["rng_seed"]+i,
             )
-            N_gammas.append(np.full(len(mf),Ng,dtype='float32'))
-            N_pions.append(np.full(len(mf),Np,dtype='float32'))
             mfs.append(mf)
+            for j in range(len(Ns)):
+                N_counts[j].append(np.full(len(mf),Ns[j],dtype='float32'))
         df = concat(mfs, axis=0, ignore_index=True).to_pandas(indiv_cols=False)
-        df = df.assign(N_gamma=np.concatenate(N_gammas,axis=0))
-        df = df.assign(N_pion=np.concatenate(N_pions,axis=0))
+        for j in range(len(N_counts)):
+            df[f'N:{names[j]}'] = np.concatenate(N_counts[j],axis=0)
         return df
 
 
