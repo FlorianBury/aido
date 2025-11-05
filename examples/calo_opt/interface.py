@@ -130,6 +130,7 @@ class CaloOptInterface(aido.UserInterfaceBase):
         df = df.fillna(0)
         df = df.reset_index(drop=True)
         df.to_parquet(reco_input_path, index=range(len(df)))
+        print (f'Dataset for training : {df.shape}')
         return None
 
     def reconstruct(self, reco_input_path: str, reco_output_path: str, is_validation: bool):

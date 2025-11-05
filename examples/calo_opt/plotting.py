@@ -1,5 +1,6 @@
 import glob
 import os
+import sys
 import pathlib
 import re
 from typing import Iterable
@@ -58,7 +59,7 @@ class CaloOptPlotting:
                 color=None,
                 label: str | None = None,
                 ):
-            df = pd.read_parquet(file_name)[:400]
+            df = pd.read_parquet(file_name)
             e_rec: pd.Series = df["Loss"]
             plt.hist(
                 e_rec,
@@ -107,7 +108,7 @@ class CaloOptPlotting:
                 color=None,
                 label: str | None = None,
                 ):
-            df = pd.read_parquet(file_name)[:400]
+            df = pd.read_parquet(file_name)
             e_rec: pd.Series = df["Reconstructed"]["true_energy"] - df["Targets"]["true_energy"]
             e_rec = e_rec / np.sqrt(df["Targets"]["true_energy"])
             plt.hist(
@@ -143,8 +144,9 @@ class CaloOptPlotting:
             ax.legend(handles, labels)
             plt.ylabel(f"Counts / ({(bins[1] - bins[0]):.2f} GeV" + r"$^{1/2}$" + ")")
             plt.xlabel(r"$(E_\text{rec} - E_\text{true}) / E_\text{true}^{1/2}\, \left[ \text{GeV}^{1/2} \right]$")
-            plt.xlim(bins[0], bins[-1])
-            plt.ylim(1, 175)
+            ymin, ymax = plt.ylim()
+            plt.ylim(1e-1,ymax*20)
+            plt.yscale('log')
             plt.tight_layout()
             plt.savefig(os.path.join(self.results_dir, "plots/energy_resolution_all"))
             plt.close()
@@ -172,6 +174,9 @@ class CaloOptPlotting:
 
             plt.legend()
             plt.xlim(-50, 50)
+            ymin, ymax = plt.ylim()
+            plt.ylim(1e-1,ymax*20)
+            plt.yscale('log')
             plt.xlabel(r"Energy Resolution $E_{\text{true}} - E_{\text{rec}}$ [GeV]")
             plt.ylabel(f"Counts {(bins[1] - bins[0]):.2f}")
             plt.savefig(os.path.join(self.results_dir, "plots/energy_resolution_first_and_last"))
@@ -269,7 +274,7 @@ class CaloOptPlotting:
 
             for file_name in self.reco_output_paths:
                 iteration = int(re.search(r"iteration=(\d+)", file_name).group(1))
-                df = pd.read_parquet(file_name)[0:400]
+                df = pd.read_parquet(file_name)
                 e_rec: pd.Series = df["Reconstructed"]["true_energy"] - df["Targets"]["true_energy"]
                 e_rec = e_rec**2 / (df["Targets"]["true_energy"] + 1)
                 e_rec_array[iteration] = np.mean(e_rec)
@@ -297,17 +302,17 @@ class CaloOptPlotting:
             plt.xlim(0, len(e_rec_array))
             plt.yscale("log")
             plt.tight_layout()
-            plt.savefig(os.path.join(self.results_dir, "plots/energy_resolution_evolution.pdf"))
+            plt.savefig(os.path.join(self.results_dir, "plots/energy_resolution_evolution.png"))
             plt.close()
 
         def plot_constraints() -> None:
             def cost(parameter_dict: aido.SimulationParameterDictionary) -> float:
                 cost = 0.0
-                for i in range(3):
+                for i in range(parameter_dict[f"num_layers"].current_value):
                     for name in ["absorber", "scintillator"]:
                         cost += (
-                            parameter_dict[f"thickness_{name}_{i}"].current_value
-                            * np.array(parameter_dict[f"material_{name}_{i}"].weighted_cost)
+                            parameter_dict[f"thickness_{name}:{i}"].current_value
+                            * np.array(parameter_dict[f"material_{name}:{i}"].weighted_cost)
                         )
                 return cost
 
@@ -319,14 +324,14 @@ class CaloOptPlotting:
                 cost_item = cost(sim_param_dict)
                 cost_list.append(cost_item)
 
-            fig, ax = plt.subplots(figsize=(None, 2.5))
+            fig, ax = plt.subplots(figsize=(7, 5))
             plt.plot(cost_list)
             plt.xlabel("Iteration")
             plt.ylabel("Cost [EUR]")
             plt.xlim(0, len(cost_list) + 1)
             plt.ylim(0,)
             plt.tight_layout()
-            plt.savefig(os.path.join(self.results_dir, "plots/cost_constraints"))
+            plt.savefig(os.path.join(self.results_dir, "plots/cost_constraints.png"))
             plt.close()
 
         if len(self.reco_output_paths) <= 1:
@@ -338,12 +343,14 @@ class CaloOptPlotting:
         plot_energy_resolution_first_and_last()
         plot_energy_resolution_evolution()
         plot_calorimeter_sideview()
+        plot_constraints()
         plt.close("all")
+        print (f'Plots saved in {self.results_dir}')
         return None
 
 
 if __name__ == "__main__":
-    results_dir: str = ...
+    results_dir: str = sys.argv[1]
 
     plotter = CaloOptPlotting(results_dir)
     plotter.mplstyle()

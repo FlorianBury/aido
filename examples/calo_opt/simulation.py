@@ -31,23 +31,27 @@ class Simulation():
         self.part_numbers = {}
         for key,config in parameter_dict.items():
             if key.startswith('N:'):
-                self.part_numbers[key.replace('N:','')] = np.arange(config['min_value'],config['max_value'])
+                self.part_numbers[key.replace('N:','')] = np.arange(config['min_value'],config['max_value']+1)
         assert len(self.part_numbers) > 0
 
         self.cw = GeometryDescriptor()
 
-        for i in range(3):
+        for i in range(parameter_dict['num_layers']['current_value']):
             self.cw.addLayer(
-                max(parameter_dict[f"thickness_absorber_{i}"]["current_value"], 1e-3),
-                parameter_dict[f"material_absorber_{i}"]["current_value"],
+                max(parameter_dict[f"thickness_absorber:{i}"]["current_value"], 1e-3),
+                parameter_dict[f"material_absorber:{i}"]["current_value"],
                 False,
-                1
+                1,
             )
+            if f'granularity:{i}' in parameter_dict.keys():
+                granularity = parameter_dict[f"granularity:{i}"]["current_value"]
+            else:
+                granularity = 1
             self.cw.addLayer(
-                max(parameter_dict[f"thickness_scintillator_{i}"]["current_value"], 1e-3),
-                parameter_dict[f"material_scintillator_{i}"]["current_value"],
+                max(parameter_dict[f"thickness_scintillator:{i}"]["current_value"], 1e-3),
+                parameter_dict[f"material_scintillator:{i}"]["current_value"],
                 True,
-                1
+                granularity,
             )
 
     def run_simulation(self) -> pd.DataFrame:

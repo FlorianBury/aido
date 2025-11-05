@@ -53,23 +53,27 @@ def train(
             os.path.join(results_dir, "plots", "validation", "reco_model", "on_validationData")
         )
     else:
-        n_epochs_pre = 24
-        n_epochs_main = 40
+        n_epochs_pre = 50
+        n_epochs_main = 100
         reco_model_previous_path = os.path.join(results_dir, "reco_model")
 
         if os.path.exists(reco_model_previous_path):
+            print ('Loading model')
             reco_model: Reconstruction = torch.load(reco_model_previous_path,weights_only=False)
             reco_dataset = ReconstructionDataset(simulation_df, means=reco_model.means, stds=reco_model.stds)
+            print (reco_model)
         else:
+            print ('Creating model')
             reco_dataset = ReconstructionDataset(simulation_df)
             reco_model = Reconstruction(*reco_dataset.shape, reco_dataset.means, reco_dataset.stds)
+            print (reco_model)
             pre_train(reco_model, reco_dataset, n_epochs_pre)
 
         # Reconstruction training:
         reco_model.to("cuda" if torch.cuda.is_available() else "cpu")
-        reco_model.train_model(reco_dataset, batch_size=256, n_epochs=n_epochs_main // 4, lr=0.003)
-        reco_model.train_model(reco_dataset, batch_size=1024, n_epochs=n_epochs_main // 2, lr=0.001)
-        reco_model.train_model(reco_dataset, batch_size=1024, n_epochs=n_epochs_main // 2, lr=0.0003)
+        reco_model.train_model(reco_dataset, batch_size=256, n_epochs=n_epochs_main, lr=0.001)
+        reco_model.train_model(reco_dataset, batch_size=1024, n_epochs=n_epochs_main, lr=0.0005)
+        reco_model.train_model(reco_dataset, batch_size=1024, n_epochs=n_epochs_main, lr=0.0001)
 
         validator = ReconstructionValidation(reco_model)
         output_df_val = validator.validate(reco_dataset)

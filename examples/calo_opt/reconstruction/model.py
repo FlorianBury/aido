@@ -46,15 +46,17 @@ class Reconstruction(torch.nn.Module):
             torch.nn.ReLU()
         )
         self.layers = torch.nn.Sequential(
-            torch.nn.Linear(num_parameters + num_input_features, 100),
+            torch.nn.Linear(num_parameters + num_input_features, 500),
             torch.nn.ELU(),
-            torch.nn.Linear(100, 100),
+            torch.nn.Linear(500, 200),
             torch.nn.ELU(),
-            torch.nn.Linear(100, 100),
+            torch.nn.Linear(200, 100),
+            torch.nn.ELU(),
             torch.nn.Linear(100, num_target_features),
         )
         self.optimizer = torch.optim.Adam(self.parameters(), lr=0.0001)
         self.device = torch.device(device)
+
 
     def forward(self, parameters, x) -> torch.Tensor:
         """ Concatenate the detector parameters and the input
@@ -69,7 +71,7 @@ class Reconstruction(torch.nn.Module):
         L2 Loss with extra weighting
 
         Alternatives:
-            
+
             1. torch.nn.MSELoss()(y_pred, y)**(1/2)
             2. (y_pred - y)**2 / (y**2 + 1)
             3. (y_pred - y)**2 / (torch.where(y > 1., y, torch.ones_like(y)))**2
@@ -99,7 +101,7 @@ class Reconstruction(torch.nn.Module):
         self.train()
 
         for epoch in range(n_epochs):
-    
+
             for batch_idx, (detector_parameters, x, y) in enumerate(train_loader):
                 detector_parameters: torch.Tensor = detector_parameters.to(self.device)
                 x: torch.Tensor = x.to(self.device)
