@@ -56,7 +56,7 @@ class NoiseAdder(torch.nn.Module):
         z = torch.randn_like(x)  # eps ~ N(0, 1)
         x_t = self.sqrtab[t, None] * x + self.sqrtmab[t, None] * z
         return x_t, z
-    
+
 
 class SurrogateDataset(Dataset):
     """ Dataset class for the Surrogate model
@@ -96,7 +96,10 @@ class SurrogateDataset(Dataset):
         """
         self.df = input_df
         self.parameters = self.df[parameter_key].to_numpy(np.float32)
-        self.context = self.df[context_key].to_numpy(np.float32)
+        if context_key in self.df.columns:
+            self.context = self.df[context_key].to_numpy(np.float32)
+        else:
+            self.context = np.empty(self.parameters.shape[0],0)
         self.targets = self.df[target_key].to_numpy(np.float32)
         self.reconstructed = self.df[reconstructed_key].to_numpy(np.float32)
         self.normalize_parameters = normalize_parameters
@@ -109,18 +112,18 @@ class SurrogateDataset(Dataset):
         )
         if means is None:
             self.means: List[np.float32] = [
-                np.mean(self.parameters, axis=0),
-                np.mean(self.context, axis=0),
-                np.mean(self.targets, axis=0),
+                self.parameters.mean(axis=0),
+                self.context.mean(axis=0),
+                self.targets.mean(axis=0),
             ]
         else:
             self.means = means
 
         if stds is None:
             self.stds: List[np.float32] = [
-                np.std(self.parameters, axis=0) + 1e-10,
-                np.std(self.context, axis=0) + 1e-10,
-                np.std(self.targets, axis=0) + 1e-10,
+                self.parameters.std(axis=0) + 1e-10,
+                self.context.std(axis=0) + 1e-10,
+                self.targets.std(axis=0) + 1e-10,
             ]
         else:
             self.stds = stds
@@ -150,7 +153,7 @@ class SurrogateDataset(Dataset):
             index: int
             ) -> torch.Tensor | np.ndarray:
         """Convert normalized features back to their original scale.
-        
+
         Parameters
         ----------
         target : torch.Tensor or np.ndarray
@@ -330,7 +333,7 @@ class Surrogate(torch.nn.Module):
             scale: float = 1.0
             ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         """Add gaussian noise to a tensor.
-        
+
         Scale the noise with 'scale', by default the noise is N(0, 1).
 
         Parameters
@@ -383,9 +386,9 @@ class Surrogate(torch.nn.Module):
             lr: float
             ) -> float:
         """Train the Surrogate Diffusion model.
-        
+
         The training loop includes noise addition as part of the diffusion process.
-        
+
         Parameters
         ----------
         surrogate_dataset : SurrogateDataset
@@ -396,7 +399,7 @@ class Surrogate(torch.nn.Module):
             The number of training epochs.
         lr : float
             The learning rate for the optimizer.
-            
+
         Returns
         -------
         float
