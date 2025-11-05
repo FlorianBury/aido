@@ -99,7 +99,7 @@ class SurrogateDataset(Dataset):
         if context_key in self.df.columns:
             self.context = self.df[context_key].to_numpy(np.float32)
         else:
-            self.context = np.empty(self.parameters.shape[0],0)
+            self.context = np.empty((self.parameters.shape[0],0),dtype=np.float32)
         self.targets = self.df[target_key].to_numpy(np.float32)
         self.reconstructed = self.df[reconstructed_key].to_numpy(np.float32)
         self.normalize_parameters = normalize_parameters
