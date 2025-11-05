@@ -119,7 +119,7 @@ def training_loop(
     # Optimization
     optimizer = Optimizer(parameter_dict=parameter_dict)
     if os.path.isfile(optimizer_previous_path):
-        checkpoint = torch.load(optimizer_previous_path)
+        checkpoint = torch.load(optimizer_previous_path,weights_only=False)
         optimizer.optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
 
     updated_parameter_dict, is_optimal = optimizer.optimize(
