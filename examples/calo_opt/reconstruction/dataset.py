@@ -31,7 +31,10 @@ class ReconstructionDataset(Dataset):
         self.parameters = self.df["Parameters"].to_numpy("float32")
         self.inputs = self.df["Inputs"].to_numpy("float32")
         self.targets = self.df["Targets"].to_numpy("float32")
-        self.context = self.df["Context"].to_numpy("float32")
+        if "Context" in self.df.columns:
+            self.context = self.df["Context"].to_numpy("float32")
+        else:
+            self.context = torch.empty(self.inputs.shape[0],0)
 
         self.shape = (
             self.parameters.shape[1],
@@ -41,20 +44,20 @@ class ReconstructionDataset(Dataset):
         )
         if means is None:
             self.means = [
-                np.mean(self.parameters, axis=0),
-                np.mean(self.inputs, axis=0),
-                np.mean(self.targets, axis=0),
-                np.mean(self.context, axis=0)
+                self.parameters.mean(axis=0),
+                self.inputs.mean(axis=0),
+                self.targets.mean(axis=0),
+                self.context.mean(axis=0),
             ]
         else:
             self.means = means
 
         if stds is None:
             self.stds = [
-                np.std(self.parameters, axis=0) + 1e-10,
-                np.std(self.inputs, axis=0) + 1e-10,
-                np.std(self.targets, axis=0) + 1e-10,
-                np.std(self.context, axis=0) + 1e-10
+                self.parameters.std(axis=0) + 1e-10,
+                self.inputs.std(axis=0) + 1e-10,
+                self.targets.std(axis=0) + 1e-10,
+                self.context.std(axis=0) + 1e-10,
             ]
         else:
             self.stds = stds
@@ -74,7 +77,7 @@ class ReconstructionDataset(Dataset):
         df = df.replace([np.inf, -np.inf], np.nan)
         df = df.dropna(axis=0, ignore_index=True)
         return df
-    
+
     def filter_empty_events(self, df: pd.DataFrame):
         df = df[df["Inputs"]["sensor_energy_0"] > 0.0]
         df = df.dropna(axis=0, ignore_index=True)
@@ -88,12 +91,12 @@ class ReconstructionDataset(Dataset):
 
     def unnormalize_detector(self, detector: torch.Tensor):
         return detector * self.c_stds[1] + self.c_means[1]
-    
+
     def normalize_detector(self, detector: torch.Tensor):
         return (detector - self.c_means[1]) / self.c_stds[1]
-        
+
     def __len__(self) -> int:
         return len(self.inputs)
-    
+
     def __getitem__(self, idx: int):
-        return self.parameters[idx], self.inputs[idx], self.targets[idx]
+        return self.parameters[idx], self.inputs[idx], self.context[idx], self.targets[idx]

@@ -64,24 +64,24 @@ class UIFullCalorimeter(CaloOptInterface):
 if __name__ == "__main__":
     sigma: float = 2.5
     min_value: float = 0.0
-    num_layers: int = 10
+    num_layers: int = 5
 
     ui_interface = UIFullCalorimeter()
     ui_interface.container_path = "/cephfs/dice/users/lw23382/sif/minicalosim_90baa21.sif"
     ui_interface.container_extra_flags = ""
     #ui_interface.container_extra_flags = "-B /work,/ceph"
     ui_interface.verbose = True
-    results_dir: str = "/cephfs/dice/users/lw23382/AIDO/aido_granular_v2"
+    results_dir: str = "/cephfs/dice/users/lw23382/AIDO/aido_granular_v3"
 
     # Non optimizable #
     parameters = [
         aido.SimulationParameter("num_layers", num_layers, optimizable=False),
         aido.SimulationParameter("max_length", 200, optimizable=False),
-        aido.SimulationParameter("max_cost", 200_000, optimizable=False),
+        aido.SimulationParameter("max_cost", 100_000, optimizable=False),
         aido.SimulationParameter("num_events", 50, optimizable=False),
         aido.SimulationParameter("granularity:0", 5, optimizable=False),
         aido.SimulationParameter(f"granularity:{num_layers-1}", 5, optimizable=False),
-            # num_events is now per batch of a set of number of particles
+        # num_events is now per batch of a set of number of particles
         aido.SimulationParameter(
             name = "N:pi+",
             starting_value = 0,
@@ -103,6 +103,11 @@ if __name__ == "__main__":
             max_value = 3,
             optimizable = False,
         ),
+        # This means the code will run 50 events of
+        # pi+ in [0,1]
+        # pi- in [0,1]
+        # gamma in [0,1,2,3]
+        # So 50 events x 15 combintions (such that tot N > 0)
         aido.SimulationParameter("minEnergy_GeV", 1., optimizable=False),
         aido.SimulationParameter("maxEnergy_GeV", 20., optimizable=False),
     ]
