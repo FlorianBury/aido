@@ -59,7 +59,6 @@ class Reconstruction(torch.nn.Module):
     def forward(self, parameters, x, c) -> torch.Tensor:
         """ Concatenate the detector parameters and the input
         """
-        x = torch.multiply(self.preprocessing_layers(parameters), x)
         x = torch.cat([parameters, x, c], dim=1)
         return self.layers(x)
 

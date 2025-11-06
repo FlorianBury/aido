@@ -104,9 +104,9 @@ if __name__ == "__main__":
             optimizable = False,
         ),
         # This means the code will run 50 events of
-        # pi+ in [0,1]
-        # pi- in [0,1]
-        # gamma in [0,1,2,3]
+        # N pi+ in [0,1]
+        # N pi- in [0,1]
+        # N gamma in [0,1,2,3]
         # So 50 events x 15 combintions (such that tot N > 0)
         aido.SimulationParameter("minEnergy_GeV", 1., optimizable=False),
         aido.SimulationParameter("maxEnergy_GeV", 20., optimizable=False),
