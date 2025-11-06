@@ -39,7 +39,8 @@ class CaloOptInterface(aido.UserInterfaceBase):
             parameter_dict_path: Dict | str,
             simulation_output_df: pd.DataFrame | str,
             input_keys: List[str],
-            target_keys: List[str],
+            reco_target_keys: List[str],
+            class_target_keys: List[str],
             context_keys: List[str] | None = None
             ):
         """
@@ -92,7 +93,8 @@ class CaloOptInterface(aido.UserInterfaceBase):
         df_combined_dict = {
             "Parameters": parameter_dict.to_df(len(input_df), display_discrete="as_one_hot"),
             "Inputs": expand_columns(input_df[expand_keys(input_keys,columns)]),
-            "Targets": expand_columns(input_df[expand_keys(target_keys,columns)]),
+            "Targets": expand_columns(input_df[expand_keys(reco_target_keys,columns)]),
+            "Classes": expand_columns(input_df[expand_keys(class_target_keys,columns)]),
             "Context": expand_columns(input_df[expand_keys(context_keys,columns)])
         }
         df: pd.DataFrame = pd.concat(
@@ -121,8 +123,9 @@ class CaloOptInterface(aido.UserInterfaceBase):
                         'sensor_energy', 'sensor_x', 'sensor_y', 'sensor_z',
                         'sensor_dx', 'sensor_dy', 'sensor_dz', 'sensor_layer'
                     ],
-                    target_keys=["true_energy"],
-                    context_keys=['N:*'],
+                    reco_target_keys=["true_energy"],
+                    class_target_keys=["contains:pi+"],
+                    context_keys=[''],
                 )
             )
 

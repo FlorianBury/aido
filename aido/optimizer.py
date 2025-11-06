@@ -36,10 +36,10 @@ class Optimizer(torch.nn.Module):
         """
         super().__init__()
         self.parameter_dict = parameter_dict
-        
+
         dev = "cuda" if torch.cuda.is_available() else "cpu"
         self.device = dev or torch.device(dev)
-        
+
         self.parameter_module = ParameterModule(self.parameter_dict).to(self.device)
         self.optimizer = torch.optim.Adam(self.parameter_module.parameters())
 
@@ -171,15 +171,17 @@ class Optimizer(torch.nn.Module):
             epoch_constraints_loss = 0.0
             stop_epoch = False
 
-            for batch_idx, (_parameters, context, targets, _reconstructed) in enumerate(data_loader):
+            for batch_idx, (_parameters, context, targets, logits, _reconstructed) in enumerate(data_loader):
                 context: torch.Tensor = context.to(self.device)
                 targets: torch.Tensor = targets.to(self.device)
+                logits : torch.Tensor = logits.to(self.device)
                 parameters_batch: torch.Tensor = self.parameter_module()
 
                 surrogate_output = self.surrogate_model.sample_forward(
                     parameters_batch,
                     context,
-                    targets
+                    targets,
+                    logits,
                 )
                 surrogate_reconstruction_loss = reconstruction_loss(
                     dataset.unnormalize_features(targets, index=2),

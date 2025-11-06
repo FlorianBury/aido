@@ -8,6 +8,7 @@ from typing import Iterable
 import matplotlib
 import matplotlib.colors as mcolors
 import matplotlib.pyplot as plt
+from sklearn.metrics import roc_curve, auc
 import numpy as np
 import pandas as pd
 
@@ -60,9 +61,28 @@ class CaloOptPlotting:
                 label: str | None = None,
                 ):
             df = pd.read_parquet(file_name)
-            e_rec: pd.Series = df["Loss"]
+            e_rec: pd.Series = df["Loss"]["Reco_loss"]
             plt.hist(
                 e_rec,
+                bins=bins,
+                color=color,
+                histtype="step",
+                label=label,
+                linewidth=1,
+                zorder=iteration
+            )
+
+        def plot_class_loss(
+                iteration: int,
+                file_name: str | os.PathLike,
+                bins: np.ndarray,
+                color=None,
+                label: str | None = None,
+                ):
+            df = pd.read_parquet(file_name)
+            e_cls: pd.Series = df["Loss"]["Class_loss"]
+            plt.hist(
+                e_cls,
                 bins=bins,
                 color=color,
                 histtype="step",
@@ -100,6 +120,38 @@ class CaloOptPlotting:
             plt.tight_layout()
             plt.savefig(os.path.join(self.results_dir, "plots/reco_loss_all"))
             plt.close()
+
+        def plot_class_loss_all() -> None:
+            sampled_iterations = [0, 10, 20, 200]
+            cmap = plt.get_cmap('coolwarm', len(sampled_iterations))
+            fig, ax = plt.subplots()
+            bins = np.linspace(0, 10, 100 + 1)
+
+            for file_name in self.reco_output_paths:
+                iteration = int(re.search(r"iteration=(\d+)", file_name).group(1))
+                if iteration in sampled_iterations:
+                    plot_class_loss(
+                        iteration=iteration,
+                        file_name=file_name,
+                        bins=bins,
+                        color=cmap(iteration),
+                        label=(f"Iteration {iteration:3d}"),
+                    )
+
+            handles, labels = ax.get_legend_handles_labels()
+            labels, handles = zip(*sorted(zip(labels, handles)))
+            ax = self.add_plot_header(ax)
+            ax.legend(handles, labels)
+            plt.yscale("log")
+            plt.xlim(bins[0], bins[-1])
+            plt.ylim(1, 5000)
+            plt.ylabel(f"Counts / ({(bins[1] - bins[0]):.2f} GeV)")
+            plt.xlabel("Classification Loss [GeV]")
+            plt.tight_layout()
+            plt.savefig(os.path.join(self.results_dir, "plots/reco_class_all"))
+            plt.close()
+
+
 
         def plot_energy_resolution_single(
                 iteration: int,
@@ -151,6 +203,74 @@ class CaloOptPlotting:
             plt.savefig(os.path.join(self.results_dir, "plots/energy_resolution_all"))
             plt.close()
 
+        def plot_classification_roc_single(
+                iteration: int,
+                file_name: str | os.PathLike,
+                color=None,
+                label: str | None = None,
+                ):
+            df = pd.read_parquet(file_name)
+            from IPython import embed; embed()
+            e_rec: pd.Series = df["Reconstructed"]["true_energy"] - df["Targets"]["true_energy"]
+            e_rec = e_rec / np.sqrt(df["Targets"]["true_energy"])
+            plt.hist(
+                e_rec,
+                bins=bins,
+                color=color,
+                histtype="step",
+                label=label,
+                linewidth=1,
+                zorder=iteration
+            )
+
+        def plot_classification_roc_all() -> None:
+            sampled_iterations = [0, 10, 20, 200]
+            cmap = plt.get_cmap('coolwarm', len(sampled_iterations))
+            fprs = {}
+            tprs = {}
+
+            def sigmoid(x):
+                return 1 / (1 + np.exp(-x))
+
+            for file_name in self.reco_output_paths:
+                iteration = int(re.search(r"iteration=(\d+)", file_name).group(1))
+                if iteration in sampled_iterations:
+                    df = pd.read_parquet(file_name)
+                    columns = list(df["Classes"].columns)
+                    names = [col.replace('contains:','') for col in columns]
+                    for i in range(len(columns)):
+                        fpr, tpr, _= roc_curve(
+                            df["Classes"][columns[i]].values,
+                            df["Reconstructed"][f"true_logits_{i}"].values,
+                        )
+                        if names[i] in fprs.keys():
+                            fprs[names[i]].append(fpr)
+                        else:
+                            fprs[names[i]] = [fpr]
+                        if names[i] in tprs.keys():
+                            tprs[names[i]].append(tpr)
+                        else:
+                            tprs[names[i]] = [tpr]
+
+            fig, axs = plt.subplots(ncols=len(fprs.keys()),figsize=(6*len(fprs.keys()),5))
+            if not isinstance(axs,np.ndarray):
+                axs = np.array([axs])
+            colors = matplotlib.cm.rainbow(np.linspace(0, 1, len(names)))
+            for i,name in enumerate(fprs.keys()):
+                for j,(fpr,tpr) in enumerate(zip(fprs[name],tprs[name])):
+                    axs[i].plot(tpr,fpr,label=f'Iteration {sampled_iterations[j]:3d} (AUC = {auc(fpr,tpr):.5f})')
+                axs[i].plot([0,1],[0,1],linestyle='dashed',color='grey')
+                axs[i].set_xlabel('TPR')
+                axs[i].set_ylabel('FPR')
+                axs[i].legend()
+                axs[i].set_xlim(0,1)
+                axs[i].set_yscale('symlog',linthresh=1e-4)
+                axs[i].set_ylim(0,1)
+            plt.tight_layout()
+            plt.savefig(os.path.join(self.results_dir, "plots/classification_roc_all"))
+            plt.close()
+
+
         def plot_energy_resolution_first_and_last() -> None:
             fig, ax = plt.subplots()
             ax = self.add_plot_header(ax)
@@ -162,7 +282,7 @@ class CaloOptPlotting:
 
                 if iteration == 0 or iteration == len(self.reco_output_paths) - 1:
                     df = pd.read_parquet(file_name)
-                    e_rec = (df["Targets"] - df["Reconstructed"])
+                    e_rec = (df["Targets"]["true_energy"] - df["Reconstructed"]["true_energy"])
                     e_rec_binned, *_ = plt.hist(
                         e_rec,
                         bins=bins,
@@ -268,17 +388,15 @@ class CaloOptPlotting:
             plt.savefig(os.path.join(self.results_dir, "plots/calorimeter_sideview"), dpi=500)
             plt.close()
 
-        def plot_energy_resolution_evolution(use_checkpoint: bool = False) -> None:
-            e_rec_array = np.full(len(self.reco_output_paths), 0.0)
-            e_loss_best_array = np.full(len(self.reco_output_paths), 0.0)
+        def plot_loss_evolutions(use_checkpoint: bool = False) -> None:
+            reco_losses = []
+            class_losses = []
 
             for file_name in self.reco_output_paths:
                 iteration = int(re.search(r"iteration=(\d+)", file_name).group(1))
                 df = pd.read_parquet(file_name)
-                e_rec: pd.Series = df["Reconstructed"]["true_energy"] - df["Targets"]["true_energy"]
-                e_rec = e_rec**2 / (df["Targets"]["true_energy"] + 1)
-                e_rec_array[iteration] = np.mean(e_rec)
-                e_loss_best_array[iteration] = np.mean(df["Loss"])
+                reco_losses.append(np.mean(df["Loss"]["Reco_loss"]))
+                class_losses.append(np.mean(df["Loss"]["Class_loss"]))
 
             plt.close()
 
@@ -289,8 +407,12 @@ class CaloOptPlotting:
             fig, ax = plt.subplots(figsize=(7, 5))
             ax = self.add_plot_header(ax)
             plt.plot(
-                e_loss_best_array,
+                reco_losses,
                 label="Mean Reconstruction Loss " + r"($\mathcal{L}_\text{reco}$)",
+            )
+            plt.plot(
+                class_losses,
+                label="Mean Classification Loss" + r"($\mathcal{L}_\text{class}$)",
             )
             plt.plot(
                 df_loss.rolling(window=30).mean(),
@@ -298,11 +420,10 @@ class CaloOptPlotting:
             )
             plt.legend()
             plt.xlabel("Iteration")
-            plt.ylabel("Energy Resolution [GeV]")
-            plt.xlim(0, len(e_rec_array))
+            plt.ylabel("Loss")
             plt.yscale("log")
             plt.tight_layout()
-            plt.savefig(os.path.join(self.results_dir, "plots/energy_resolution_evolution.png"))
+            plt.savefig(os.path.join(self.results_dir, "plots/loss_evolution.png"))
             plt.close()
 
         def plot_constraints() -> None:
@@ -340,8 +461,10 @@ class CaloOptPlotting:
 
         plot_energy_resolution_all()
         plot_reco_loss_all()
+        plot_class_loss_all()
+        plot_classification_roc_all()
         plot_energy_resolution_first_and_last()
-        plot_energy_resolution_evolution()
+        plot_loss_evolutions()
         plot_calorimeter_sideview()
         plot_constraints()
         plt.close("all")

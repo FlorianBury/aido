@@ -7,9 +7,9 @@ from aido.logger import logger
 
 @dataclass
 class OptimizerConfig:
-    lr: float = 0.02
+    lr: float = 0.01
     batch_size: int = 512
-    n_epochs: int = 40
+    n_epochs: int = 50
 
 
 @dataclass
@@ -35,7 +35,7 @@ class SchedulerConfig:
 class AIDOConfig:
     """
     Sub-classes:
-    
+
     Optimizer:
         optimizer.lr: float = 0.02 (>0)
         optimizer.batch_size: int = 512

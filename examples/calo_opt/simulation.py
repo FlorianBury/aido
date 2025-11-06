@@ -78,6 +78,7 @@ class Simulation():
         df = concat(mfs, axis=0, ignore_index=True).to_pandas(indiv_cols=False)
         for j in range(len(N_counts)):
             df[f'N:{names[j]}'] = np.concatenate(N_counts[j],axis=0)
+            df[f'contains:{names[j]}'] = df[f'N:{names[j]}'] > 0
         return df
 
 

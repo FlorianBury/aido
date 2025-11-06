@@ -37,32 +37,29 @@ class Reconstruction(torch.nn.Module):
         self.n_context_features = num_context_features
         self.means = initial_means
         self.stds = initial_stds
-        self.preprocessing_layers = torch.nn.Sequential(
-            torch.nn.Linear(num_parameters, 100),
-            torch.nn.ELU(),
-            torch.nn.Linear(100, 100),
-            torch.nn.ELU(),
-            torch.nn.Linear(100, num_input_features),
-            torch.nn.ReLU()
-        )
         self.layers = torch.nn.Sequential(
-            torch.nn.Linear(num_parameters + num_input_features, 500),
+            torch.nn.Linear(num_parameters + num_input_features + num_context_features, 512),
             torch.nn.ELU(),
-            torch.nn.Linear(500, 200),
+            torch.nn.BatchNorm1d(512),
+            torch.nn.Linear(512, 512),
             torch.nn.ELU(),
-            torch.nn.Linear(200, 100),
+            torch.nn.BatchNorm1d(512),
+            torch.nn.Linear(512, 256),
             torch.nn.ELU(),
-            torch.nn.Linear(100, num_target_features),
+            torch.nn.BatchNorm1d(256),
+            torch.nn.Linear(256,64,),
+            torch.nn.ELU(),
+            torch.nn.BatchNorm1d(64),
+            torch.nn.Linear(64, num_target_features),
         )
         self.optimizer = torch.optim.Adam(self.parameters(), lr=0.0001)
         self.device = torch.device(device)
 
 
-    def forward(self, parameters, x) -> torch.Tensor:
+    def forward(self, parameters, x, c) -> torch.Tensor:
         """ Concatenate the detector parameters and the input
         """
-        x = torch.multiply(self.preprocessing_layers(parameters), x)
-        x = torch.cat([parameters, x], dim=1)
+        x = torch.cat([parameters, x, c], dim=1)
         return self.layers(x)
 
     @staticmethod
@@ -102,11 +99,12 @@ class Reconstruction(torch.nn.Module):
 
         for epoch in range(n_epochs):
 
-            for batch_idx, (detector_parameters, x, y) in enumerate(train_loader):
+            for batch_idx, (detector_parameters, x, c, y) in enumerate(train_loader):
                 detector_parameters: torch.Tensor = detector_parameters.to(self.device)
                 x: torch.Tensor = x.to(self.device)
+                c: torch.Tensor = c.to(self.device)
                 y: torch.Tensor = y.to(self.device)
-                y_pred: torch.Tensor = self(detector_parameters, x)
+                y_pred: torch.Tensor = self(detector_parameters, x, c)
                 loss_per_event = self.loss(
                     dataset.unnormalize_target(y),
                     dataset.unnormalize_target(y_pred)
@@ -137,11 +135,12 @@ class Reconstruction(torch.nn.Module):
         self.to(self.device)
         self.eval()
 
-        for batch_idx, (detector_parameters, x, y) in enumerate(data_loader):
+        for batch_idx, (detector_parameters, x, c, y) in enumerate(data_loader):
             detector_parameters = detector_parameters.to(self.device)
             x: torch.Tensor = x.to(self.device)
+            c: torch.Tensor = c.to(self.device)
             y: torch.Tensor = y.to(self.device)
-            y_pred: torch.Tensor = self(detector_parameters, x)
+            y_pred: torch.Tensor = self(detector_parameters, x, c)
 
             loss_per_event = self.loss(
                 dataset.unnormalize_target(y),

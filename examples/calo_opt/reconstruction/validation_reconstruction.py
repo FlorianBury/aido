@@ -55,17 +55,29 @@ class ReconstructionValidation():
 
         reco = validation_df["Reconstructed"]["true_energy"].values
         true = validation_df["Targets"]["true_energy"].values
+        maxE = max(reco.max(),true.max())
 
-        fig, ax = plt.subplots()
-        bins = np.linspace(0, 20, 40 + 1)
+        fig, axs = plt.subplots(ncols=2,figsize=(9,4))
+        bins = np.linspace(0, maxE, 40 + 1)
 
-        plt.hist(true, bins=bins, label=r"$E_\text{true}$" + " (Simulation)", histtype="step", color="green")
-        plt.hist(reco, bins=bins, label=r"$E_\text{reco}$" + " (Reconstruction)", histtype="step", color="blue")
-        plt.xlim(0.0, 20)
-        plt.xlabel("Energy [GeV]")
-        plt.ylim(0, 150)
-        plt.ylabel(f"Counts / ({(bins[1] - bins[0]):.2f} GeV)")
-        plt.legend()
+        axs[0].hist(true, bins=bins, label=r"$E_\text{true}$" + " (Simulation)", histtype="step", color="green")
+        axs[0].hist(reco, bins=bins, label=r"$E_\text{reco}$" + " (Reconstruction)", histtype="step", color="blue")
+        axs[0].set_xlabel("Energy [GeV]")
+        axs[0].set_ylabel(f"Counts / ({(bins[1] - bins[0]):.2f} GeV)")
+        axs[0].set_yscale('log')
+        y_min,y_max = axs[0].get_ylim()
+        axs[0].set_ylim(1e-1,y_max*20)
+        axs[0].legend()
+
+        h = axs[1].hist2d(
+            true,
+            reco,
+            bins = bins,
+            norm = matplotlib.colors.LogNorm(vmin=1),
+        )
+        axs[1].set_xlabel(r"$E_\text{true}$" + " (Simulation) GeV")
+        axs[1].set_ylabel(r"$E_\text{reco}$" + " (Reconstruction) GeV")
+        fig.colorbar(h[3], ax=axs[1])
         plt.tight_layout()
 
         if fig_savepath is not None:
@@ -75,4 +87,4 @@ class ReconstructionValidation():
             print(f"Validation Plots Saved to '{fig_savepath}'")
             return None
         else:
-            return fig, ax, bins
+            return fig, axs, bins
