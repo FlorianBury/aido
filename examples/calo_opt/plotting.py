@@ -4,6 +4,8 @@ import sys
 import pathlib
 import re
 from typing import Iterable
+import torch
+import torchmetrics
 
 import matplotlib
 import matplotlib.colors as mcolors
@@ -41,14 +43,14 @@ class CaloOptPlotting:
             "Detector Optimization",
             transform=ax.transAxes, fontsize=14, style='italic', va='top', ha='left'
         )
-        plt.text(
-            0.015, 0.98,
-            "Sampling Calorimeter\n"
-            "50% photons and 50% pions\n"
-            r"$20 \times 400$" + " MC Events / Iteration\n"
-            r"$E_\text{true}=[1, 20]$" + " GeV",
-            transform=ax.transAxes, va='top', ha='left'
-        )  # Adjust the text as fitting
+        #plt.text(
+        #    0.015, 0.98,
+        #    "Sampling Calorimeter\n"
+        #    "50% photons and 50% pions\n"
+        #    r"$20 \times 400$" + " MC Events / Iteration\n"
+        #    r"$E_\text{true}=[1, 20]$" + " GeV",
+        #    transform=ax.transAxes, va='top', ha='left'
+        #)  # Adjust the text as fitting
         return ax
 
     def plot(self, parameter_dict: aido.SimulationParameterDictionary | None = None) -> None:
@@ -163,18 +165,20 @@ class CaloOptPlotting:
             df = pd.read_parquet(file_name)
             e_rec: pd.Series = df["Reconstructed"]["true_energy"] - df["Targets"]["true_energy"]
             e_rec = e_rec / np.sqrt(df["Targets"]["true_energy"])
+            fwhm = aido.Plotting.FWHM(bins, np.histogram(e_rec,bins)[0])
             plt.hist(
                 e_rec,
                 bins=bins,
                 color=color,
                 histtype="step",
-                label=label,
+                label=label + f'(FWHM = {fwhm.width:.3f} GeV$^{{1/2}}$)',
                 linewidth=1,
                 zorder=iteration
             )
 
         def plot_energy_resolution_all() -> None:
-            sampled_iterations = [0, 10, 20, 200]
+            sampled_iterations = [0, 5, 10, 20, 50, 100, 200]
+            sampled_iterations = [0, 10, 20, 40, 60, 80]
             cmap = plt.get_cmap('coolwarm', len(sampled_iterations))
             fig, ax = plt.subplots()
             bins = np.linspace(-10, 10, 100 + 1)
@@ -193,7 +197,7 @@ class CaloOptPlotting:
             handles, labels = ax.get_legend_handles_labels()
             labels, handles = zip(*sorted(zip(labels, handles)))
             ax = self.add_plot_header(ax)
-            ax.legend(handles, labels)
+            ax.legend(handles, labels, fontsize=12)
             plt.ylabel(f"Counts / ({(bins[1] - bins[0]):.2f} GeV" + r"$^{1/2}$" + ")")
             plt.xlabel(r"$(E_\text{rec} - E_\text{true}) / E_\text{true}^{1/2}\, \left[ \text{GeV}^{1/2} \right]$")
             ymin, ymax = plt.ylim()
@@ -203,69 +207,51 @@ class CaloOptPlotting:
             plt.savefig(os.path.join(self.results_dir, "plots/energy_resolution_all"))
             plt.close()
 
-        def plot_classification_roc_single(
-                iteration: int,
-                file_name: str | os.PathLike,
-                color=None,
-                label: str | None = None,
-                ):
-            df = pd.read_parquet(file_name)
-            from IPython import embed; embed()
-            e_rec: pd.Series = df["Reconstructed"]["true_energy"] - df["Targets"]["true_energy"]
-            e_rec = e_rec / np.sqrt(df["Targets"]["true_energy"])
-            plt.hist(
-                e_rec,
-                bins=bins,
-                color=color,
-                histtype="step",
-                label=label,
-                linewidth=1,
-                zorder=iteration
-            )
-
-        def plot_classification_roc_all() -> None:
-            sampled_iterations = [0, 10, 20, 200]
-            cmap = plt.get_cmap('coolwarm', len(sampled_iterations))
-            fprs = {}
-            tprs = {}
-
-            def sigmoid(x):
-                return 1 / (1 + np.exp(-x))
-
-            for file_name in self.reco_output_paths:
-                iteration = int(re.search(r"iteration=(\d+)", file_name).group(1))
-                if iteration in sampled_iterations:
-                    df = pd.read_parquet(file_name)
-                    columns = list(df["Classes"].columns)
-                    names = [col.replace('contains:','') for col in columns]
-                    for i in range(len(columns)):
-                        fpr, tpr, _= roc_curve(
-                            df["Classes"][columns[i]].values,
-                            df["Reconstructed"][f"true_logits_{i}"].values,
-                        )
-                        if names[i] in fprs.keys():
-                            fprs[names[i]].append(fpr)
-                        else:
-                            fprs[names[i]] = [fpr]
-                        if names[i] in tprs.keys():
-                            tprs[names[i]].append(tpr)
-                        else:
-                            tprs[names[i]] = [tpr]
-
+        def plot_fpr_tpr(fprs,tprs,iterations):
             fig, axs = plt.subplots(ncols=len(fprs.keys()),figsize=(6*len(fprs.keys()),5))
             if not isinstance(axs,np.ndarray):
                 axs = np.array([axs])
-            colors = matplotlib.cm.rainbow(np.linspace(0, 1, len(names)))
+            colors = matplotlib.cm.rainbow(np.linspace(0, 1, len(fprs)))
             for i,name in enumerate(fprs.keys()):
                 for j,(fpr,tpr) in enumerate(zip(fprs[name],tprs[name])):
-                    axs[i].plot(tpr,fpr,label=f'Iteration {sampled_iterations[j]:3d} (AUC = {auc(fpr,tpr):.5f})')
-                axs[i].plot([0,1],[0,1],linestyle='dashed',color='grey')
+                    axs[i].plot(tpr,fpr,label=f'Iteration {iterations[j]:3d} (AUC = {auc(fpr,tpr):.5f})')
+                axs[i].plot(np.linspace(0,1,100),np.linspace(0,1,100),linestyle='dashed',color='grey',label='Random classifier')
                 axs[i].set_xlabel('TPR')
                 axs[i].set_ylabel('FPR')
+                axs[i].set_title(f'{name} ROC curve')
                 axs[i].legend()
                 axs[i].set_xlim(0,1)
-                axs[i].set_yscale('symlog',linthresh=1e-4)
                 axs[i].set_ylim(0,1)
+                axs[i].set_yscale('symlog',linthresh=1e-2)
+            return fig
+
+
+        def plot_classification_roc_all() -> None:
+            sampled_iterations = [0, 5, 10, 20, 50, 100, 200]
+            sampled_iterations = [0, 10, 20, 40, 60, 80]
+            fprs = {}
+            tprs = {}
+            for iteration in sampled_iterations:
+                for file_name in self.reco_output_paths:
+                    if f'/iteration={iteration}/' in file_name:
+                        df = pd.read_parquet(file_name)
+                        columns = list(df["Classes"].columns)
+                        names = [col.replace('contains:','') for col in columns]
+                        for i in range(len(columns)):
+                            fpr, tpr, _= roc_curve(
+                                df["Classes"][columns[i]].values,
+                                df["Reconstructed"][f"true_logits_{i}"].values,
+                            )
+                            if names[i] in fprs.keys():
+                                fprs[names[i]].append(fpr)
+                            else:
+                                fprs[names[i]] = [fpr]
+                            if names[i] in tprs.keys():
+                                tprs[names[i]].append(tpr)
+                            else:
+                                tprs[names[i]] = [tpr]
+
+            fig = plot_fpr_tpr(fprs,tprs,sampled_iterations)
             plt.tight_layout()
             plt.savefig(os.path.join(self.results_dir, "plots/classification_roc_all"))
             plt.close()
@@ -301,6 +287,112 @@ class CaloOptPlotting:
             plt.ylabel(f"Counts {(bins[1] - bins[0]):.2f}")
             plt.savefig(os.path.join(self.results_dir, "plots/energy_resolution_first_and_last"))
             plt.close()
+
+        def plot_classification_first_and_last() -> None:
+            fprs = {}
+            tprs = {}
+            iterations = []
+            for file_name in self.reco_output_paths:
+                iteration = int(re.search(r"iteration=(\d+)", file_name).group(1))
+                if iteration == 0 or iteration == len(self.reco_output_paths) - 1:
+                    iterations.append(iteration)
+                    df = pd.read_parquet(file_name)
+                    columns = list(df["Classes"].columns)
+                    names = [col.replace('contains:','') for col in columns]
+                    for i in range(len(columns)):
+                        fpr, tpr, _= roc_curve(
+                            df["Classes"][columns[i]].values,
+                            df["Reconstructed"][f"true_logits_{i}"].values,
+                        )
+                        if names[i] in fprs.keys():
+                            fprs[names[i]].append(fpr)
+                        else:
+                            fprs[names[i]] = [fpr]
+                        if names[i] in tprs.keys():
+                            tprs[names[i]].append(tpr)
+                        else:
+                            tprs[names[i]] = [tpr]
+            fig = plot_fpr_tpr(fprs,tprs,iterations)
+            plt.tight_layout()
+            plt.savefig(os.path.join(self.results_dir, "plots/classification_roc_first_and_last"))
+            plt.close()
+
+        def plot_classification_metrics_evolution():
+            iterations = []
+            metric_functions = {
+                'Accuracy': torchmetrics.classification.BinaryAccuracy(),
+                'AUC' : torchmetrics.classification.BinaryAUROC(),
+                'Recall' : torchmetrics.classification.BinaryRecall(),
+                'F1' : torchmetrics.classification.BinaryF1Score(),
+            }
+            metrics_values = {}
+            for file_name in self.reco_output_paths:
+                iteration = int(re.search(r"iteration=(\d+)", file_name).group(1))
+                iterations.append(iteration)
+                df = pd.read_parquet(file_name)
+                columns = list(df["Classes"].columns)
+                names = [col.replace('contains:','') for col in columns]
+                for i in range(len(columns)):
+                    if names[i] not in metrics_values.keys():
+                        metrics_values[names[i]] = {}
+                    for label,func in metric_functions.items():
+                        if label not in metrics_values[names[i]]:
+                            metrics_values[names[i]][label] = []
+                        metrics_values[names[i]][label].append(
+                            func(
+                                torch.nn.functional.sigmoid(torch.tensor(df["Reconstructed"][f"true_logits_{i}"].values)),
+                                torch.tensor(df["Classes"][columns[i]].values),
+                            )
+                        )
+
+            fig, axs = plt.subplots(ncols=len(metrics_values),figsize=(6*len(metrics_values.keys()),5))
+            iterations = np.array(iterations)
+            order = iterations.argsort()
+            if not isinstance(axs,np.ndarray):
+                axs = np.array([axs])
+            for i,name in enumerate(metrics_values.keys()):
+                metrics = metrics_values[name]
+                for label,values in metrics.items():
+                    values = np.array(values)
+                    axs[i].plot(
+                        iterations[order],
+                        values[order],
+                        label = label,
+                    )
+                axs[i].set_xlabel('Iterations')
+                axs[i].set_xlim(iterations.min(),iterations.max())
+                axs[i].legend()
+            plt.tight_layout()
+            plt.savefig(os.path.join(self.results_dir, "plots/classification_metrics_evolution"))
+            plt.close()
+
+        def plot_energy_resolution_evolution():
+            iterations = []
+            fwhms = []
+            for file_name in self.reco_output_paths:
+                iteration = int(re.search(r"iteration=(\d+)", file_name).group(1))
+                iterations.append(iteration)
+                df = pd.read_parquet(file_name)
+                e_rec = (df["Targets"]["true_energy"] - df["Reconstructed"]["true_energy"]) / np.sqrt(df["Targets"]["true_energy"])
+                bins = np.linspace(e_rec.min(),e_rec.max(),40)
+                fwhm = aido.Plotting.FWHM(bins, np.histogram(e_rec,bins)[0])
+                fwhms.append(fwhm.width)
+            fig,ax = plt.subplots(figsize=(6,5))
+            iterations = np.array(iterations)
+            fwhms = np.array(fwhms)
+            order = iterations.argsort()
+            ax.plot(
+                iterations[order],
+                fwhms[order],
+            )
+            ax.set_xlabel('Iterations')
+            ax.set_ylabel(r"FWHM $(E_\text{rec} - E_\text{true}) / E_\text{true}^{1/2}\, \left[ \text{GeV}^{1/2} \right]$")
+            ax.set_xlim(iterations.min(),iterations.max())
+            plt.tight_layout()
+            plt.savefig(os.path.join(self.results_dir, "plots/energy_resolution_evolution"))
+            plt.close()
+
+
 
         def plot_calorimeter_sideview(
             add_legend: bool = None,
@@ -460,10 +552,13 @@ class CaloOptPlotting:
             return None
 
         plot_energy_resolution_all()
+        plot_energy_resolution_first_and_last()
+        plot_energy_resolution_evolution()
+        plot_classification_roc_all()
+        plot_classification_first_and_last()
+        plot_classification_metrics_evolution()
         plot_reco_loss_all()
         plot_class_loss_all()
-        plot_classification_roc_all()
-        plot_energy_resolution_first_and_last()
         plot_loss_evolutions()
         plot_calorimeter_sideview()
         plot_constraints()

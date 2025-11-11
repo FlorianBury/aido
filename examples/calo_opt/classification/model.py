@@ -61,6 +61,7 @@ class Classification(torch.nn.Module):
 
     @staticmethod
     def loss(y: torch.Tensor, y_pred: torch.Tensor) -> torch.Tensor:
+        assert y_pred.shape == y.shape, f'y has shape {y.shape}, but y_pred has shape {y_pred.shape}'
         loss = torch.nn.BCEWithLogitsLoss()(y_pred,y)
         if loss.dim() == 2 and loss.shape[1] > 1:
             loss = loss.mean(dim=-1)

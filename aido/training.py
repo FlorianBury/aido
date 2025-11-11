@@ -11,6 +11,7 @@ from aido.logger import logger
 from aido.optimizer import Optimizer
 from aido.simulation_helpers import SimulationParameterDictionary
 from aido.surrogate import Surrogate, SurrogateDataset
+from aido.surrogate_validation import SurrogateValidation
 
 
 def pre_train(model: Surrogate, dataset: SurrogateDataset, n_epochs: int):
@@ -43,6 +44,7 @@ def pre_train(model: Surrogate, dataset: SurrogateDataset, n_epochs: int):
 def training_loop(
         reco_file_paths_dict: dict | str | os.PathLike,
         reconstruction_loss_function: Callable[[torch.Tensor, torch.Tensor], torch.Tensor],
+        classification_loss_function: Callable[[torch.Tensor, torch.Tensor], torch.Tensor],
         constraints: None | Callable[[SimulationParameterDictionary], float | torch.Tensor] = None,
         ):
 
@@ -69,15 +71,42 @@ def training_loop(
     surrogate_df = pd.read_parquet(output_df_path)
 
     if os.path.isfile(surrogate_save_path):
-        surrogate: Surrogate = torch.load(surrogate_save_path)
-        surrogate_dataset = SurrogateDataset(surrogate_df, means=surrogate.means, stds=surrogate.stds)
+        surrogate: Surrogate = torch.load(surrogate_save_path,weights_only=False)
+        surrogate_dataset = SurrogateDataset(
+            input_df = surrogate_df,
+            means = surrogate.means,
+            stds = surrogate.stds,
+            reconstruction = config.surrogate.reconstruction,
+            classification = config.surrogate.classification,
+            normalize_parameters = False,
+        )
     else:
         if os.path.isfile(surrogate_previous_path):
+            print ('Loading surrogate')
             surrogate: Surrogate = torch.load(surrogate_previous_path,weights_only=False)
-            surrogate_dataset = SurrogateDataset(surrogate_df, means=surrogate.means, stds=surrogate.stds)
+            surrogate_dataset = SurrogateDataset(
+                input_df = surrogate_df,
+                means = surrogate.means,
+                stds = surrogate.stds,
+                reconstruction = config.surrogate.reconstruction,
+                classification = config.surrogate.classification,
+                normalize_parameters = False,
+            )
+            print (surrogate)
         else:
-            surrogate_dataset = SurrogateDataset(surrogate_df)
-            surrogate = Surrogate(*surrogate_dataset.shape, surrogate_dataset.means, surrogate_dataset.stds)
+            print ('Creating surrogate')
+            surrogate_dataset = SurrogateDataset(
+                input_df = surrogate_df,
+                reconstruction = config.surrogate.reconstruction,
+                classification = config.surrogate.classification,
+                normalize_parameters = False,
+            )
+            surrogate = Surrogate(
+                *surrogate_dataset.shape,
+                initial_means = surrogate_dataset.means,
+                initial_stds = surrogate_dataset.stds,
+            )
+            print (surrogate)
             pre_train(surrogate, surrogate_dataset, config.surrogate.n_epoch_pre)
 
         logger.info("Surrogate Training")
@@ -92,9 +121,9 @@ def training_loop(
             pre_train(surrogate, surrogate_dataset, config.surrogate.n_epoch_pre)
             surrogate.train_model(
                 surrogate_dataset,
-                batch_size=256,
+                batch_size=1024,
                 n_epochs=n_epochs_main // 5,
-                lr=5 * surrogate_lr
+                lr=3 * surrogate_lr
             )
             surrogate.train_model(
                 surrogate_dataset,
@@ -116,6 +145,15 @@ def training_loop(
 
     torch.save(surrogate, surrogate_save_path)
 
+    # Validation
+    surrogate_validator = SurrogateValidation(surrogate)
+    validation_df = surrogate_validator.validate(surrogate_dataset)
+    surrogate_validator.plot(
+        validation_df,
+        fig_savepath=os.path.join(results_dir, "plots", "validation", "surrogate", "on_trainingData.png"),
+    )
+
+
     # Optimization
     optimizer = Optimizer(parameter_dict=parameter_dict)
     if os.path.isfile(optimizer_previous_path):
@@ -128,6 +166,7 @@ def training_loop(
         batch_size=config.optimizer.batch_size,
         n_epochs=config.optimizer.n_epochs,
         reconstruction_loss=reconstruction_loss_function,
+        classification_loss=classification_loss_function,
         additional_constraints=constraints,
         parameter_optimizer_savepath=parameter_optimizer_savepath,
         lr=config.optimizer.lr
@@ -140,14 +179,14 @@ def training_loop(
     pd.DataFrame(
         np.array(surrogate.surrogate_loss),
         columns=["Surrogate Loss"]
-    ).to_csv(surrogate_loss_save_path)
+    ).to_csv(surrogate_loss_save_path+'.csv')
     pd.DataFrame(
         np.array(optimizer.optimizer_loss),
         columns=["Optimizer Loss"]
-    ).to_csv(optimizer_loss_save_path)
+    ).to_csv(optimizer_loss_save_path+'.csv')
     pd.DataFrame(
         np.array(optimizer.constraints_loss),
         columns=["Constraints Loss"]
-    ).to_csv(constraints_loss_save_path)
+    ).to_csv(constraints_loss_save_path+'.csv')
 
     return updated_parameter_dict

@@ -2,6 +2,7 @@ from typing import Union
 
 import matplotlib
 import matplotlib.pyplot as plt
+from sklearn.metrics import roc_curve, auc
 import numpy as np
 import pandas as pd
 import torch
@@ -58,45 +59,52 @@ class ClassificationValidation():
 
         columns = list(validation_df["Classes"].columns)
         names = [col.replace('contains:','') for col in columns]
-        def sigmoid(x):
-            return 1 / (1 + np.exp(-x))
         reco = np.concatenate(
             [
-                sigmoid(validation_df["Reconstructed"][f"true_logits_{i}"].values).reshape(-1,1)
+                validation_df["Reconstructed"][f"true_logits_{i}"].values.reshape(-1,1)
                 for i in range(len(columns))
-            ]
-        )
+            ],
+            axis = 1,
+        ) # logits
         true = np.concatenate(
             [
                 validation_df["Classes"][col].values.reshape(-1,1)
                 for col in columns
-            ]
-        )
+            ],
+            axis = 1,
+        ) # true class 0/1
 
         fig, axs = plt.subplots(ncols=2,nrows=len(names),figsize=(9,len(names)*4))
         if axs.ndim == 1:
             axs = axs.reshape(1,-1)
-        bins = np.linspace(0, 1, 40 + 1)
         colors = matplotlib.cm.rainbow(np.linspace(0, 1, len(names)))
         for i, name in enumerate(names):
-            axs[i,0].hist(true[:,i], bins=bins, label=f"Class {name} (Simulation)", histtype="step", color='green')
-            axs[i,0].hist(reco[:,i], bins=bins, label=f"Class {name} (Reconstruction)", histtype="step", color='blue')
-            axs[i,0].set_xlabel("Class score")
+            bins = np.linspace(reco[:,i].min(),reco[:,i].max(), 40+1)
+            axs[i,0].hist(reco[:,i][true[:,i]==0], bins=bins, label=f"Class {name} (Reconstruction) [class=0]", histtype="step", color='blue', linestyle='dashed')
+            axs[i,0].hist(reco[:,i][true[:,i]==1], bins=bins, label=f"Class {name} (Reconstruction) [class=1]", histtype="step", color='blue', linestyle='dotted')
+            axs[i,0].set_xlabel("Class logits")
             axs[i,0].set_ylabel(f"Counts / ({(bins[1] - bins[0]):.2f})")
             axs[i,0].set_yscale('log')
             y_min,y_max = axs[i,0].get_ylim()
             axs[i,0].set_ylim(1e-1,y_max*20)
             axs[i,0].legend()
 
-            h = axs[i,1].hist2d(
-                true[:,i],
-                reco[:,i],
-                bins = bins,
-                norm = matplotlib.colors.LogNorm(vmin=1),
+            fpr, tpr, _= roc_curve(true[:,i],reco[:,i])
+
+            axs[i,1].plot(
+                tpr,
+                fpr,
+                label = f'AUC = {auc(fpr,tpr):.5f}',
+                linewidth = 2,
+                color = 'royalblue',
             )
-            axs[i,1].set_xlabel("Class score (Simulation)")
-            axs[i,1].set_ylabel("Class score (Reconstruction)")
-            fig.colorbar(h[3], ax=axs[i,1])
+            axs[i,1].set_xlabel('TPR')
+            axs[i,1].set_ylabel('FPR')
+            axs[i,1].legend()
+            axs[i,1].set_xlim(0,1)
+            axs[i,1].set_yscale('symlog',linthresh=1e-4)
+            axs[i,1].set_ylim(0,1)
+
             plt.tight_layout()
 
         if fig_savepath is not None:

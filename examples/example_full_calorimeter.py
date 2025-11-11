@@ -153,7 +153,7 @@ if __name__ == "__main__":
         parameters=parameters,
         user_interface=ui_interface,
         simulation_tasks=20,
-        max_iterations=300,
+        max_iterations=0,
         threads=20,
         results_dir=results_dir,
         description="""

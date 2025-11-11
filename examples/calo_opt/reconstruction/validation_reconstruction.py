@@ -55,10 +55,13 @@ class ReconstructionValidation():
 
         reco = validation_df["Reconstructed"]["true_energy"].values
         true = validation_df["Targets"]["true_energy"].values
-        maxE = max(reco.max(),true.max())
 
         fig, axs = plt.subplots(ncols=2,figsize=(9,4))
-        bins = np.linspace(0, maxE, 40 + 1)
+        bins = np.linspace(
+            min(reco.min(),true.min()),
+            max(reco.max(),true.max()),
+            40 + 1,
+        )
 
         axs[0].hist(true, bins=bins, label=r"$E_\text{true}$" + " (Simulation)", histtype="step", color="green")
         axs[0].hist(reco, bins=bins, label=r"$E_\text{reco}$" + " (Reconstruction)", histtype="step", color="blue")
@@ -81,7 +84,7 @@ class ReconstructionValidation():
         plt.tight_layout()
 
         if fig_savepath is not None:
-            plt.savefig(fig_savepath)
+            plt.savefig(fig_savepath,dpi=600)
             plt.close()
 
             print(f"Validation Plots Saved to '{fig_savepath}'")

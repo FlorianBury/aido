@@ -105,13 +105,13 @@ class ReconstructionTask(AIDOTask):
         Run the reconstruction process. The type of processing depends on the validation flag.
         """
         output_type = "reco" if not self.validation else "validation"
-        
+
         interface.merge(
             parameter_dict_file_paths=self.get_input_file_names("param_dict.json"),
             simulation_file_paths=self.get_input_file_names("simulation_output"),
             reco_input_path=self.get_output_file_name(f"{output_type}_input_df")
         )
-        
+
         interface.reconstruct(
             reco_input_path=self.get_output_file_name(f"{output_type}_input_df"),
             reco_output_path=self.get_output_file_name(f"{output_type}_output_df"),
@@ -205,7 +205,8 @@ class OptimizationTask(AIDOTask):
                 new_param_dict = torch_safe_wrapper(
                     training_loop,
                     reco_file_paths_dict=self.reco_paths_dict["own_path"],
-                    reconstruction_loss_function=interface.loss,
+                    reconstruction_loss_function=interface.reconstruction_loss,
+                    classification_loss_function=interface.classification_loss,
                     constraints=interface.constraints,
                 )
             except torch.cuda.OutOfMemoryError as e:

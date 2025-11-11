@@ -45,7 +45,6 @@ def train(
     simulation_df: pd.DataFrame = pd.read_parquet(input_df_path)
 
     if isVal:
-        sys.exit()
         reco_model: Reconstruction = torch.load(os.path.join(results_dir, "reco_model"))
         reco_dataset = ReconstructionDataset(simulation_df, means=reco_model.means, stds=reco_model.stds)
 
@@ -75,7 +74,7 @@ def train(
             reco_dataset = ReconstructionDataset(simulation_df)
             reco_model = Reconstruction(*reco_dataset.shape, reco_dataset.means, reco_dataset.stds)
             class_dataset = ClassificationDataset(simulation_df)
-            class_model = Classification(*reco_dataset.shape, reco_dataset.means, reco_dataset.stds)
+            class_model = Classification(*class_dataset.shape, reco_dataset.means, reco_dataset.stds)
             print (reco_model)
             print (class_model)
             print ('Pre-training reco model')
@@ -106,17 +105,15 @@ def train(
         output_df_val = pd.merge(reco_df_val,class_df_val,on=common_cols,how='outer')
 
         output_df_val.to_parquet(output_df_path)
-        torch.save(reco_model, reco_model_previous_path)
-        torch.save(class_model, class_model_previous_path)
+        torch.save(reco_model, reco_model_previous_path+'.pt')
+        torch.save(class_model, class_model_previous_path+'.pt')
 
-        print ('reco_validator')
         os.makedirs(os.path.join(results_dir, "plots", "validation", "reco_model"),exist_ok=True)
-        os.makedirs(os.path.join(results_dir, "plots", "validation", "class_model"),exist_ok=True)
         reco_validator.plot(
             reco_df_val,
             os.path.join(results_dir, "plots", "validation", "reco_model", "on_trainingData")
         )
-        print ('class_validator')
+        os.makedirs(os.path.join(results_dir, "plots", "validation", "class_model"),exist_ok=True)
         class_validator.plot(
             class_df_val,
             os.path.join(results_dir, "plots", "validation", "class_model", "on_trainingData")

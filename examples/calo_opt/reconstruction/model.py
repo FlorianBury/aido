@@ -40,16 +40,16 @@ class Reconstruction(torch.nn.Module):
         self.layers = torch.nn.Sequential(
             torch.nn.Linear(num_parameters + num_input_features + num_context_features, 512),
             torch.nn.ELU(),
-            torch.nn.BatchNorm1d(512),
+            #torch.nn.BatchNorm1d(512),
             torch.nn.Linear(512, 512),
             torch.nn.ELU(),
-            torch.nn.BatchNorm1d(512),
+            #torch.nn.BatchNorm1d(512),
             torch.nn.Linear(512, 256),
             torch.nn.ELU(),
-            torch.nn.BatchNorm1d(256),
+            #torch.nn.BatchNorm1d(256),
             torch.nn.Linear(256,64,),
             torch.nn.ELU(),
-            torch.nn.BatchNorm1d(64),
+            #torch.nn.BatchNorm1d(64),
             torch.nn.Linear(64, num_target_features),
         )
         self.optimizer = torch.optim.Adam(self.parameters(), lr=0.0001)

@@ -5,6 +5,7 @@ from typing import Dict, Iterable, List
 import pandas as pd
 import torch
 from calo_opt.reconstruction.model import Reconstruction
+from calo_opt.classification.model import Classification
 
 import aido
 
@@ -65,6 +66,8 @@ class CaloOptInterface(aido.UserInterfaceBase):
             return f'^{regex}$'
 
         def expand_keys(keys,colums):
+            if len(keys) == 0:
+                return []
             regex = re.compile("|".join(wildcard_to_regex(key) for key in keys))
             return [col for col in columns if regex.match(col)]
 
@@ -124,7 +127,7 @@ class CaloOptInterface(aido.UserInterfaceBase):
                         'sensor_dx', 'sensor_dy', 'sensor_dz', 'sensor_layer'
                     ],
                     reco_target_keys=["true_energy"],
-                    class_target_keys=["contains:pi+"],
+                    class_target_keys=["contains:e+"],
                     context_keys=[''],
                 )
             )
@@ -147,5 +150,8 @@ class CaloOptInterface(aido.UserInterfaceBase):
         os.system("rm -f *.pkl")
         return None
 
-    def loss(self, y: torch.Tensor, y_pred: torch.Tensor) -> torch.Tensor:
+    def reconstruction_loss(self, y: torch.Tensor, y_pred: torch.Tensor) -> torch.Tensor:
         return Reconstruction.loss(y, y_pred)
+
+    def classification_loss(self, y: torch.Tensor, y_pred: torch.Tensor) -> torch.Tensor:
+        return Classification.loss(y, y_pred)

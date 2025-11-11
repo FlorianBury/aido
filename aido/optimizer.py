@@ -131,6 +131,7 @@ class Optimizer(torch.nn.Module):
             batch_size: int,
             n_epochs: int,
             reconstruction_loss: Callable[[torch.Tensor, torch.Tensor], torch.Tensor],
+            classification_loss: Callable[[torch.Tensor, torch.Tensor], torch.Tensor],
             additional_constraints: None | Callable[[SimulationParameterDictionary, Dict], torch.Tensor] = None,
             parameter_optimizer_savepath: str | os.PathLike | None = None,
             device: str | None = None,
@@ -171,23 +172,35 @@ class Optimizer(torch.nn.Module):
             epoch_constraints_loss = 0.0
             stop_epoch = False
 
-            for batch_idx, (_parameters, context, targets, logits, _reconstructed) in enumerate(data_loader):
+            for batch_idx, (_parameters, context, targets, classes, _reconstructed) in enumerate(data_loader):
                 context: torch.Tensor = context.to(self.device)
                 targets: torch.Tensor = targets.to(self.device)
-                logits : torch.Tensor = logits.to(self.device)
+                classes : torch.Tensor = classes.to(self.device)
                 parameters_batch: torch.Tensor = self.parameter_module()
 
-                surrogate_output = self.surrogate_model.sample_forward(
-                    parameters_batch,
-                    context,
-                    targets,
-                    logits,
+                surrogate_output = dataset.unnormalize_features(
+                    self.surrogate_model.sample_forward(
+                        parameters_batch,
+                        context,
+                        targets,
+                        classes,
+                    ),
+                    index = 4,
                 )
-                surrogate_reconstruction_loss = reconstruction_loss(
-                    dataset.unnormalize_features(targets, index=2),
-                    dataset.unnormalize_features(surrogate_output, index=2)
-                )
-                loss = surrogate_reconstruction_loss.mean()
+                loss = torch.tensor([0.])
+                if dataset.reconstruction:
+                    loss += reconstruction_loss(
+                        dataset.unnormalize_features(targets, index=2),
+                        surrogate_output[:,0:1],
+                    ).mean()
+                    idx_first = 1
+                else:
+                    idx_first = 0
+                if dataset.classification:
+                    loss += classification_loss(
+                        dataset.unnormalize_features(classes, index=3),
+                        surrogate_output[:,idx_forst:]
+                    ).mean()
                 surrogate_loss_detached = loss.item()
                 constraints_loss = self.other_constraints(
                     additional_constraints,
@@ -198,10 +211,13 @@ class Optimizer(torch.nn.Module):
 
                 loss.backward()
 
-                if np.isnan(loss.item()):
-                    logger.error("Optimizer: NaN loss, exiting.")
-                    self.optimizer.step()
-                    return self.parameter_dict, False
+                if torch.isnan(loss):
+                    #logger.error("Optimizer: NaN loss, exiting.")
+                    logger.error(f"Optimizer: NaN loss for {torch.isnan(loss).sum()} entries.")
+                    loss = torch.nan_to_num(loss,nan=0.)
+
+                    #self.optimizer.step()
+                    #return self.parameter_dict, False
 
                 self.optimizer.step()
                 self.optimizer.zero_grad()

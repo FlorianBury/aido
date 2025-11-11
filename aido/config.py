@@ -14,8 +14,10 @@ class OptimizerConfig:
 
 @dataclass
 class SurrogateConfig:
-    n_epoch_pre: int = 24
-    n_epochs_main: int = 40
+    n_epoch_pre: int = 25
+    n_epochs_main: int = 50
+    reconstruction: bool = True
+    classification: bool = False
 
 
 @dataclass

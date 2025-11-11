@@ -28,6 +28,14 @@ class Simulation():
             self.maxEnergy_GeV = max(self.minEnergy_GeV,parameter_dict["maxEnergy_GeV"]["current_value"])
         else:
             self.maxEnergy_GeV = min(self.minEnergy_GeV,20.)
+        if "sharedEnergy" in parameter_dict and parameter_dict['sharedEnergy']:
+            self.sharedEnergy = True
+        else:
+            self.sharedEnergy = False
+        if "exclusiveSimulation" in parameter_dict and parameter_dict['exclusiveSimulation']:
+            self.exclusiveSimulation = True
+        else:
+            self.exclusiveSimulation = False
         self.part_numbers = {}
         for key,config in parameter_dict.items():
             if key.startswith('N:'):
@@ -61,14 +69,17 @@ class Simulation():
         for i,Ns in enumerate(itertools.product(*self.part_numbers.values())):
             if sum(Ns) == 0:
                 continue
+            if self.exclusiveSimulation:
+                if sum(bool(N) for N in Ns) != 1:
+                    continue
             parts = [name for name,N in zip(names,Ns) for _ in range(N)]
             print (f'Particles used in G4Calo : {parts} ({self.n_events} events)')
             mf: MiniFrame = run_batch(
                 gd=self.cw,
                 nEvents=self.n_events,
                 particleSpec=parts,
-                minEnergy_GeV=self.minEnergy_GeV*sum(Ns),
-                maxEnergy_GeV=self.maxEnergy_GeV*sum(Ns),
+                minEnergy_GeV=self.minEnergy_GeV*sum(Ns) if not self.sharedEnergy else self.minEnergy_GeV,
+                maxEnergy_GeV=self.maxEnergy_GeV*sum(Ns) if not self.sharedEnergy else self.maxEnergy_GeV,
                 no_mp=True,
                 manual_seed=self.parameter_dict["metadata"]["rng_seed"]+i,
             )

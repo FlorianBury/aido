@@ -71,20 +71,34 @@ if __name__ == "__main__":
     ui_interface.container_extra_flags = ""
     #ui_interface.container_extra_flags = "-B /software,/cephfs"
     ui_interface.verbose = True
-    results_dir: str = "/cephfs/dice/users/lw23382/AIDO/aido_classifier_v1"
+    results_dir: str = "/cephfs/dice/users/lw23382/AIDO/aido_classifier_v10"
 
     # Non optimizable #
     parameters = [
         aido.SimulationParameter("num_layers", num_layers, optimizable=False),
         aido.SimulationParameter("max_length", 200, optimizable=False),
         aido.SimulationParameter("max_cost", 100_000, optimizable=False),
-        aido.SimulationParameter("num_events", 500, optimizable=False),
-        aido.SimulationParameter("granularity:0", 5, optimizable=False),
-        aido.SimulationParameter("granularity:1", 5, optimizable=False),
-        aido.SimulationParameter("granularity:2", 5, optimizable=False),
+        aido.SimulationParameter("num_events", 100, optimizable=False),
+        aido.SimulationParameter("granularity:0", 1, optimizable=False),
+        aido.SimulationParameter("granularity:1", 1, optimizable=False),
+        aido.SimulationParameter("granularity:2", 1, optimizable=False),
             # num_events is now per batch of a set of number of particles
+        #aido.SimulationParameter(
+        #    name = "N:pi+",
+        #    starting_value = 0,
+        #    min_value = 0,
+        #    max_value = 1,
+        #    optimizable = False,
+        #),
+        #aido.SimulationParameter(
+        #    name = "N:pi-",
+        #    starting_value = 0,
+        #    min_value = 0,
+        #    max_value = 1,
+        #    optimizable = False,
+        #),
         aido.SimulationParameter(
-            name = "N:pi+",
+            name = "N:e+",
             starting_value = 0,
             min_value = 0,
             max_value = 1,
@@ -94,19 +108,21 @@ if __name__ == "__main__":
             name = "N:gamma",
             starting_value = 0,
             min_value = 0,
-            max_value = 3,
+            max_value = 1,
             optimizable = False,
         ),
         aido.SimulationParameter("minEnergy_GeV", 1., optimizable=False),
-        aido.SimulationParameter("maxEnergy_GeV", 20., optimizable=False),
+        aido.SimulationParameter("maxEnergy_GeV", 100., optimizable=False),
+        aido.SimulationParameter("sharedEnergy", True, optimizable=False),
+        aido.SimulationParameter("exclusiveSimulation", True, optimizable=False),
     ]
     # Layers #
     for i in range(num_layers):
         parameters.append(
-            aido.SimulationParameter(f"thickness_absorber:{i}", 5., min_value=min_value, sigma=sigma),
+            aido.SimulationParameter(f"thickness_absorber:{i}", 10., min_value=min_value, sigma=sigma),
         )
         parameters.append(
-            aido.SimulationParameter(f"thickness_scintillator:{i}", 5., min_value=min_value, sigma=sigma),
+            aido.SimulationParameter(f"thickness_scintillator:{i}", 10., min_value=min_value, sigma=sigma),
         )
         parameters.append(
             aido.SimulationParameter(
@@ -130,9 +146,9 @@ if __name__ == "__main__":
     aido.optimize(
         parameters=aido.SimulationParameterDictionary(parameters),
         user_interface=ui_interface,
-        simulation_tasks=20,
+        simulation_tasks=1,
         max_iterations=200,
-        threads=20,
+        threads=1,
         results_dir=results_dir,
         description="""
 Optimization of a sampling calorimeter with cost and length constraints.
