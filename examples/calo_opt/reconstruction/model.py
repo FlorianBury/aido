@@ -38,21 +38,18 @@ class Reconstruction(torch.nn.Module):
         self.means = initial_means
         self.stds = initial_stds
         self.layers = torch.nn.Sequential(
-            torch.nn.Linear(num_parameters + num_input_features + num_context_features, 512),
+            torch.nn.Linear(num_parameters + num_input_features + num_context_features, 100),
             torch.nn.ELU(),
-            #torch.nn.BatchNorm1d(512),
-            torch.nn.Linear(512, 512),
+            torch.nn.BatchNorm1d(100),
+            torch.nn.Linear(100, 100),
             torch.nn.ELU(),
-            #torch.nn.BatchNorm1d(512),
-            torch.nn.Linear(512, 256),
+            torch.nn.BatchNorm1d(100),
+            torch.nn.Linear(100,100),
             torch.nn.ELU(),
-            #torch.nn.BatchNorm1d(256),
-            torch.nn.Linear(256,64,),
-            torch.nn.ELU(),
-            #torch.nn.BatchNorm1d(64),
-            torch.nn.Linear(64, num_target_features),
+            torch.nn.BatchNorm1d(100),
+            torch.nn.Linear(100, num_target_features),
         )
-        self.optimizer = torch.optim.Adam(self.parameters(), lr=0.0001)
+        self.optimizer = torch.optim.Adam(self.parameters(), lr=0.0001, weight_decay=1e-6)
         self.device = torch.device(device)
 
 
@@ -83,22 +80,29 @@ class Reconstruction(torch.nn.Module):
 
     def train_model(
         self,
-        dataset: ReconstructionDataset,
+        train_dataset: ReconstructionDataset,
+        valid_dataset: ReconstructionDataset,
         batch_size: int,
         n_epochs: int,
         lr: float,
+        plotter = None,
+        early_stopping = None,
     ):
+        if early_stopping.early_stop:
+            return
         print(f"Reconstruction Training: {lr=}, {batch_size=}")
-        train_loader = DataLoader(dataset, batch_size=batch_size, shuffle=True)
+        train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
+        valid_loader = DataLoader(valid_dataset, batch_size=batch_size*10, shuffle=False)
 
         for param_group in self.optimizer.param_groups:
             param_group['lr'] = lr
 
         self.to(self.device)
-        self.train()
 
         for epoch in range(n_epochs):
-
+            # Training #
+            self.train()
+            train_losses = torch.zeros(len(train_loader))
             for batch_idx, (detector_parameters, x, c, y) in enumerate(train_loader):
                 detector_parameters: torch.Tensor = detector_parameters.to(self.device)
                 x: torch.Tensor = x.to(self.device)
@@ -106,17 +110,42 @@ class Reconstruction(torch.nn.Module):
                 y: torch.Tensor = y.to(self.device)
                 y_pred: torch.Tensor = self(detector_parameters, x, c)
                 loss_per_event = self.loss(
-                    dataset.unnormalize_target(y),
-                    dataset.unnormalize_target(y_pred)
+                    train_dataset.unnormalize_target(y),
+                    train_dataset.unnormalize_target(y_pred)
                 )
                 loss = loss_per_event.clone().mean()
+                train_losses[batch_idx] = loss.item()
                 self.optimizer.zero_grad()
                 loss.backward()
                 self.optimizer.step()
+            # Validation #
+            self.eval()
+            valid_losses = torch.zeros(len(valid_loader))
+            for batch_idx, (detector_parameters, x, c, y) in enumerate(valid_loader):
+                detector_parameters: torch.Tensor = detector_parameters.to(self.device)
+                x: torch.Tensor = x.to(self.device)
+                c: torch.Tensor = c.to(self.device)
+                y: torch.Tensor = y.to(self.device)
+                y_pred: torch.Tensor = self(detector_parameters, x, c)
+                loss_per_event = self.loss(
+                    train_dataset.unnormalize_target(y),
+                    train_dataset.unnormalize_target(y_pred)
+                )
+                loss = loss_per_event.clone().mean()
+                valid_losses[batch_idx] = loss.item()
 
-            print(f"Reco Epoch: {epoch} \tLoss: {loss.item():.8f}")
+            print(f"Reco Epoch: {epoch:4d} - Loss: {train_losses.mean():8.3f} - Val loss {valid_losses.mean():8.3f}")
+            if plotter is not None:
+                plotter.add_value('Loss (training)',train_losses.mean())
+                plotter.add_value('Loss (validation)',valid_losses.mean())
+                plotter.add_value('lr',lr)
+            early_stopping(valid_losses.mean(),self)
+            if early_stopping.early_stop:
+                print ('Early stopping')
+                break
 
         self.eval()
+
 
     def apply_model_in_batches(
         self,

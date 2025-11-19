@@ -169,7 +169,7 @@ class Plotting:
             sampled_param_dict_filepath: str | os.PathLike = "/task_outputs/iteration=*/validation=False"
             ) -> Tuple[pd.DataFrame, np.ndarray]:
         """Generate a DataFrame of simulation parameters and their values.
-        
+
         This method collects simulation parameters and their values for each iteration
         and task, organizing them into a DataFrame.
 
@@ -203,7 +203,7 @@ class Plotting:
         df_list: List[pd.DataFrame] = []
 
         for iteration_dir in glob.glob(sampled_param_dict_filepath):
-            
+
             for file_order, simulation_dir in enumerate(glob.glob(iteration_dir + "/simulation_task_id=*")):
 
                 df = SimulationParameterDictionary.from_json(
@@ -387,7 +387,7 @@ class Plotting:
                     Axes on which to add the vertical lines
                 color: str
                 linestyles: str
-            
+
             Returns
             -------
                 ax: matplotlib.pyplot.Axes
@@ -395,3 +395,7 @@ class Plotting:
             ax.vlines(self.x_left, 0.0, self.height_absolute, color=color, linestyles=linestyles, **kwargs)
             ax.vlines(self.x_right, 0.0, self.height_absolute, color=color, linestyles=linestyles, **kwargs)
             return ax
+
+
+
+

@@ -5,6 +5,7 @@ from typing import Callable
 import numpy as np
 import pandas as pd
 import torch
+from sklearn.model_selection import train_test_split
 
 from aido.config import AIDOConfig
 from aido.logger import logger
@@ -14,7 +15,7 @@ from aido.surrogate import Surrogate, SurrogateDataset
 from aido.surrogate_validation import SurrogateValidation
 
 
-def pre_train(model: Surrogate, dataset: SurrogateDataset, n_epochs: int):
+def pre_train(model: Surrogate, train_dataset: SurrogateDataset, valid_dataset: SurrogateDataset, n_epochs: int, batch_size: int):
     """Pre-train the Surrogate Model using a three-stage process.
 
     This function performs pre-training in three stages with different
@@ -31,14 +32,7 @@ def pre_train(model: Surrogate, dataset: SurrogateDataset, n_epochs: int):
     """
     model.to("cuda" if torch.cuda.is_available() else "cpu")
 
-    logger.info('Surrogate: Pre-Training 0')
-    model.train_model(dataset, batch_size=512, n_epochs=n_epochs, lr=0.001)
-
-    logger.info('Surrogate: Pre-Training 1')
-    model.train_model(dataset, batch_size=1024, n_epochs=n_epochs, lr=0.001)
-
-    logger.info('Surrogate: Pre-Training 2')
-    model.train_model(dataset, batch_size=1024, n_epochs=n_epochs, lr=0.0003)
+    model.train_model(train_dataset, valid_dataset, batch_size=batch_size, n_epochs=n_epochs, lr=0.005)
 
 
 def training_loop(
@@ -69,89 +63,119 @@ def training_loop(
     # Surrogate
     parameter_dict = SimulationParameterDictionary.from_json(parameter_dict_input_path)
     surrogate_df = pd.read_parquet(output_df_path)
+    train_df, valid_df = train_test_split(surrogate_df, test_size=0.2,random_state=42)
+
 
     if os.path.isfile(surrogate_save_path):
         surrogate: Surrogate = torch.load(surrogate_save_path,weights_only=False)
-        surrogate_dataset = SurrogateDataset(
-            input_df = surrogate_df,
+        surrogate_train_dataset = SurrogateDataset(
+            input_df = train_df,
             means = surrogate.means,
             stds = surrogate.stds,
             reconstruction = config.surrogate.reconstruction,
             classification = config.surrogate.classification,
             normalize_parameters = False,
         )
+        surrogate_valid_dataset = SurrogateDataset(
+            input_df = valid_df,
+            means = surrogate.means,
+            stds = surrogate.stds,
+            reconstruction = config.surrogate.reconstruction,
+            classification = config.surrogate.classification,
+            normalize_parameters = False,
+        )
+
     else:
         if os.path.isfile(surrogate_previous_path):
             print ('Loading surrogate')
             surrogate: Surrogate = torch.load(surrogate_previous_path,weights_only=False)
-            surrogate_dataset = SurrogateDataset(
-                input_df = surrogate_df,
+            print (surrogate)
+            surrogate_train_dataset = SurrogateDataset(
+                input_df = train_df,
                 means = surrogate.means,
                 stds = surrogate.stds,
                 reconstruction = config.surrogate.reconstruction,
                 classification = config.surrogate.classification,
                 normalize_parameters = False,
             )
-            print (surrogate)
-        else:
-            print ('Creating surrogate')
-            surrogate_dataset = SurrogateDataset(
-                input_df = surrogate_df,
+            surrogate_valid_dataset = SurrogateDataset(
+                input_df = valid_df,
+                means = surrogate.means,
+                stds = surrogate.stds,
                 reconstruction = config.surrogate.reconstruction,
                 classification = config.surrogate.classification,
                 normalize_parameters = False,
             )
+        else:
+            print ('Creating surrogate')
+            surrogate_train_dataset = SurrogateDataset(
+                input_df = train_df,
+                reconstruction = config.surrogate.reconstruction,
+                classification = config.surrogate.classification,
+                normalize_parameters = False,
+            )
+            surrogate_valid_dataset = SurrogateDataset(
+                input_df = valid_df,
+                reconstruction = config.surrogate.reconstruction,
+                classification = config.surrogate.classification,
+                normalize_parameters = False,
+                means = surrogate_train_dataset.means,
+                stds = surrogate_train_dataset.stds,
+            )
             surrogate = Surrogate(
-                *surrogate_dataset.shape,
-                initial_means = surrogate_dataset.means,
-                initial_stds = surrogate_dataset.stds,
+                *surrogate_train_dataset.shape,
+                initial_means = surrogate_train_dataset.means,
+                initial_stds = surrogate_train_dataset.stds,
             )
             print (surrogate)
-            pre_train(surrogate, surrogate_dataset, config.surrogate.n_epoch_pre)
+            pre_train(
+                surrogate,
+                surrogate_train_dataset,
+                surrogate_valid_dataset,
+                config.surrogate.n_epoch_pre,
+                config.surrogate.batch_size,
+            )
 
         logger.info("Surrogate Training")
         n_epochs_main = config.surrogate.n_epochs_main
-        surrogate.train_model(surrogate_dataset, batch_size=1024, n_epochs=n_epochs_main // 2, lr=0.005)
-        surrogate_loss = surrogate.train_model(surrogate_dataset, batch_size=1024, n_epochs=n_epochs_main, lr=0.0003)
-
-        surrogate_lr = 0.001 * (1 if parameter_dict.iteration <= 50 else 0.5)
-
-        while not surrogate.update_best_surrogate_loss(surrogate_loss):
-            logger.info("Surrogate retraining")
-            pre_train(surrogate, surrogate_dataset, config.surrogate.n_epoch_pre)
-            surrogate.train_model(
-                surrogate_dataset,
-                batch_size=1024,
-                n_epochs=n_epochs_main // 5,
-                lr=3 * surrogate_lr
-            )
-            surrogate.train_model(
-                surrogate_dataset,
-                batch_size=1024,
-                n_epochs=n_epochs_main // 2,
-                lr=1 * surrogate_lr
-            )
-            surrogate.train_model(
-                surrogate_dataset,
-                batch_size=1024,
-                n_epochs=n_epochs_main // 2,
-                lr=0.3 * surrogate_lr)
-            surrogate_loss = surrogate.train_model(
-                surrogate_dataset,
-                batch_size=1024,
-                n_epochs=n_epochs_main // 2,
-                lr=0.1 * surrogate_lr,
-            )
+        batch_size = config.surrogate.batch_size
+        surrogate.train_model(
+            surrogate_train_dataset,
+            surrogate_valid_dataset,
+            batch_size = batch_size,
+            n_epochs = n_epochs_main,
+            lr = 0.001,
+        )
+        surrogate.train_model(
+            surrogate_train_dataset,
+            surrogate_valid_dataset,
+            batch_size = batch_size,
+            n_epochs = n_epochs_main,
+            lr = 0.0005,
+        )
+        surrogate.train_model(
+            surrogate_train_dataset,
+            surrogate_valid_dataset,
+            batch_size = batch_size,
+            n_epochs = n_epochs_main,
+            lr = 0.0001,
+        )
 
     torch.save(surrogate, surrogate_save_path)
 
     # Validation
     surrogate_validator = SurrogateValidation(surrogate)
-    validation_df = surrogate_validator.validate(surrogate_dataset)
+    train_df = surrogate_validator.validate(surrogate_train_dataset)
+    valid_df = surrogate_validator.validate(surrogate_valid_dataset)
     surrogate_validator.plot(
-        validation_df,
+        train_df,
         fig_savepath=os.path.join(results_dir, "plots", "validation", "surrogate", "on_trainingData.png"),
     )
+    surrogate_validator.plot(
+        valid_df,
+        fig_savepath=os.path.join(results_dir, "plots", "validation", "surrogate", "on_validationData.png"),
+    )
+
 
 
     # Optimization
@@ -159,6 +183,15 @@ def training_loop(
     if os.path.isfile(optimizer_previous_path):
         checkpoint = torch.load(optimizer_previous_path,weights_only=False)
         optimizer.optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
+
+    surrogate_dataset = SurrogateDataset(
+        input_df = surrogate_df,
+        means = surrogate.means,
+        stds = surrogate.stds,
+        reconstruction = config.surrogate.reconstruction,
+        classification = config.surrogate.classification,
+        normalize_parameters = False,
+    )
 
     updated_parameter_dict, is_optimal = optimizer.optimize(
         surrogate_model=surrogate,

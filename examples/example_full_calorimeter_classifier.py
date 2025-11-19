@@ -71,17 +71,19 @@ if __name__ == "__main__":
     ui_interface.container_extra_flags = ""
     #ui_interface.container_extra_flags = "-B /software,/cephfs"
     ui_interface.verbose = True
-    results_dir: str = "/cephfs/dice/users/lw23382/AIDO/aido_classifier_v10"
+    results_dir: str = "/cephfs/dice/users/lw23382/AIDO/aido_classifier_v19"
 
     # Non optimizable #
     parameters = [
         aido.SimulationParameter("num_layers", num_layers, optimizable=False),
         aido.SimulationParameter("max_length", 200, optimizable=False),
         aido.SimulationParameter("max_cost", 100_000, optimizable=False),
-        aido.SimulationParameter("num_events", 100, optimizable=False),
-        aido.SimulationParameter("granularity:0", 1, optimizable=False),
-        aido.SimulationParameter("granularity:1", 1, optimizable=False),
-        aido.SimulationParameter("granularity:2", 1, optimizable=False),
+        aido.SimulationParameter("num_events", 500, optimizable=False),
+        aido.SimulationParameter("granularity:0", 100, optimizable=False),
+        aido.SimulationParameter("granularity:1", 100, optimizable=False),
+        aido.SimulationParameter("granularity:2", 100, optimizable=False),
+        #aido.SimulationParameter("granularity:3", 20, optimizable=False),
+        #aido.SimulationParameter("granularity:4", 20, optimizable=False),
             # num_events is now per batch of a set of number of particles
         #aido.SimulationParameter(
         #    name = "N:pi+",
@@ -111,7 +113,7 @@ if __name__ == "__main__":
             max_value = 1,
             optimizable = False,
         ),
-        aido.SimulationParameter("minEnergy_GeV", 1., optimizable=False),
+        aido.SimulationParameter("minEnergy_GeV", 5., optimizable=False),
         aido.SimulationParameter("maxEnergy_GeV", 100., optimizable=False),
         aido.SimulationParameter("sharedEnergy", True, optimizable=False),
         aido.SimulationParameter("exclusiveSimulation", True, optimizable=False),
@@ -119,10 +121,10 @@ if __name__ == "__main__":
     # Layers #
     for i in range(num_layers):
         parameters.append(
-            aido.SimulationParameter(f"thickness_absorber:{i}", 10., min_value=min_value, sigma=sigma),
+            aido.SimulationParameter(f"thickness_absorber:{i}", 0.001, min_value=0., sigma=0.0000001),
         )
         parameters.append(
-            aido.SimulationParameter(f"thickness_scintillator:{i}", 10., min_value=min_value, sigma=sigma),
+            aido.SimulationParameter(f"thickness_scintillator:{i}", 3., min_value=0., sigma=0.00001),
         )
         parameters.append(
             aido.SimulationParameter(
@@ -130,7 +132,7 @@ if __name__ == "__main__":
                 "G4_Fe",
                 discrete_values=["G4_Pb", "G4_Fe"],
                 cost=[25, 4.166],
-                probabilities=[0.5, 0.5]
+                probabilities=[0.99, 0.01]
             )
         )
         parameters.append(
@@ -139,15 +141,15 @@ if __name__ == "__main__":
                 "G4_POLYSTYRENE",
                 discrete_values=["G4_PbWO4", "G4_POLYSTYRENE"],
                 cost=[2500.0, 0.01],
-                probabilities=[0.5, 0.5]
+                probabilities=[0.99, 0.01]
             )
         )
     # Optimize #
     aido.optimize(
         parameters=aido.SimulationParameterDictionary(parameters),
         user_interface=ui_interface,
-        simulation_tasks=1,
-        max_iterations=200,
+        simulation_tasks=50,
+        max_iterations=1,
         threads=1,
         results_dir=results_dir,
         description="""

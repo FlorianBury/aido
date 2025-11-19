@@ -3,6 +3,7 @@ import re
 from typing import Dict, Iterable, List
 
 import pandas as pd
+import dask.dataframe as dd
 import torch
 from calo_opt.reconstruction.model import Reconstruction
 from calo_opt.classification.model import Classification
@@ -88,17 +89,18 @@ class CaloOptInterface(aido.UserInterfaceBase):
             return df
 
         if isinstance(simulation_output_df, str):
-            input_df: pd.DataFrame = pd.read_parquet(simulation_output_df)
+            #input_df: pd.DataFrame = pd.read_parquet(simulation_output_df)
+            input_df: pd.DataFrame = dd.read_parquet(simulation_output_df)
         columns = input_df.columns
 
         parameter_dict = aido.SimulationParameterDictionary.from_json(parameter_dict_path)
 
         df_combined_dict = {
             "Parameters": parameter_dict.to_df(len(input_df), display_discrete="as_one_hot"),
-            "Inputs": expand_columns(input_df[expand_keys(input_keys,columns)]),
-            "Targets": expand_columns(input_df[expand_keys(reco_target_keys,columns)]),
-            "Classes": expand_columns(input_df[expand_keys(class_target_keys,columns)]),
-            "Context": expand_columns(input_df[expand_keys(context_keys,columns)])
+            "Inputs": expand_columns(input_df[expand_keys(input_keys,columns)].compute()),
+            "Targets": expand_columns(input_df[expand_keys(reco_target_keys,columns)].compute()),
+            "Classes": expand_columns(input_df[expand_keys(class_target_keys,columns)].compute()),
+            "Context": expand_columns(input_df[expand_keys(context_keys,columns)].compute())
         }
         df: pd.DataFrame = pd.concat(
             df_combined_dict.values(),
@@ -116,25 +118,37 @@ class CaloOptInterface(aido.UserInterfaceBase):
         """ Combines parameter dicts and pd.DataFrames into a large pd.DataFrame which is subsequently saved
         to parquet format.
         """
+        if os.path.exists(reco_input_path):
+            print (f'File {reco_input_path} already exists, will not merge')
+            return None
         df_list: List[pd.DataFrame] = []
 
-        for simulation_output_path in list(zip(parameter_dict_file_paths, simulation_file_paths)):
+        print ('Loading simulations')
+        for idx,simulation_output_path in enumerate(zip(parameter_dict_file_paths, simulation_file_paths)):
+            print (f'... {simulation_output_path[1]} [{idx+1}/{len(simulation_file_paths)}]')
             df_list.append(
                 type(self).convert_sim_to_reco(
                     *simulation_output_path,
                     input_keys=[
-                        'sensor_energy', 'sensor_x', 'sensor_y', 'sensor_z',
-                        'sensor_dx', 'sensor_dy', 'sensor_dz', 'sensor_layer'
+                        'sensor_energy',
+                        #'sensor_x',
+                        #'sensor_y',
+                        #'sensor_z',
+                        #'sensor_dx',
+                        #'sensor_dy',
+                        #'sensor_dz',
+                        'sensor_layer'
                     ],
                     reco_target_keys=["true_energy"],
                     class_target_keys=["contains:e+"],
                     context_keys=[''],
                 )
             )
-
+        print (f'Concatenating {len(df_list)} dataframes')
         df: pd.DataFrame = pd.concat(df_list, axis=0, ignore_index=True)
         df = df.fillna(0)
         df = df.reset_index(drop=True)
+        print (f'Writing dataframe to {reco_input_path}')
         df.to_parquet(reco_input_path, index=range(len(df)))
         print (f'Dataset for training : {df.shape}')
         return None

@@ -262,7 +262,7 @@ class Surrogate(torch.nn.Module):
             initial_means: List[np.float32],
             initial_stds: List[np.float32],
             n_time_steps: int = 100,
-            betas: Tuple[float] = (1e-4, 0.01),
+            betas: Tuple[float] = (1e-4, 0.02),
             ):
         """
         Initializes the surrogate model.
@@ -293,20 +293,20 @@ class Surrogate(torch.nn.Module):
                 + self.num_classes
                 + self.num_reconstructed
                 + 1,
-                256,
+                100,
             ),
             torch.nn.ELU(),
-            torch.nn.BatchNorm1d(256),
-            torch.nn.Linear(256, 256),
+            #torch.nn.BatchNorm1d(100),
+            #torch.nn.Linear(100, 100),
+            #torch.nn.ELU(),
+            #torch.nn.BatchNorm1d(100),
+            torch.nn.Linear(100, 100),
             torch.nn.ELU(),
-            torch.nn.BatchNorm1d(256),
-            torch.nn.Linear(256, 256),
+            #torch.nn.BatchNorm1d(100),
+            torch.nn.Linear(100, 100),
             torch.nn.ELU(),
-            torch.nn.BatchNorm1d(256),
-            torch.nn.Linear(256, 256),
-            torch.nn.ELU(),
-            torch.nn.BatchNorm1d(256),
-            torch.nn.Linear(256, self.num_reconstructed),
+            #torch.nn.BatchNorm1d(100),
+            torch.nn.Linear(100, self.num_reconstructed),
         )
 
         self.optimizer = torch.optim.Adam(self.parameters(), lr=0.01)
@@ -336,6 +336,10 @@ class Surrogate(torch.nn.Module):
         assert (
             context.shape[0] == reconstructed.shape[0]
         ), "Context and Reconstructed inputs have unequal lengths"
+
+        if parameters.shape[0] == 1:
+            parameters = parameters.repeat(context.shape[0], 1)
+
         return self.layers(
             torch.cat(
                 [
@@ -423,7 +427,8 @@ class Surrogate(torch.nn.Module):
 
     def train_model(
             self,
-            surrogate_dataset: SurrogateDataset,
+            train_dataset: SurrogateDataset,
+            valid_dataset: SurrogateDataset,
             batch_size: int,
             n_epochs: int,
             lr: float
@@ -448,14 +453,17 @@ class Surrogate(torch.nn.Module):
         float
             The final training loss value.
         """
-        train_loader = DataLoader(surrogate_dataset, batch_size=batch_size, shuffle=True)
+        print(f"Surrogate Training: {lr=}, {batch_size=}")
+        train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
+        valid_loader = DataLoader(valid_dataset, batch_size=10*batch_size, shuffle=False)
         for param_group in self.optimizer.param_groups:
             param_group['lr'] = lr
         self.to(self.device)
-        self.train()
 
         for epoch in range(n_epochs):
-
+            # Training #
+            self.train()
+            train_losses = torch.zeros(len(train_loader))
             for batch_idx, (parameters, context, targets, classes, reconstructed) in enumerate(train_loader):
                 parameters: torch.Tensor = parameters.to(self.device)
                 context: torch.Tensor = context.to(self.device)
@@ -467,17 +475,35 @@ class Surrogate(torch.nn.Module):
                 model_out: torch.Tensor = self(parameters, context, targets, classes, reco_noisy, time_step / self.n_time_steps)
 
                 loss: torch.Tensor = self.loss_mse(noise, model_out)
+                train_losses[batch_idx] = loss.item()
                 self.optimizer.zero_grad()
                 loss.backward()
                 self.optimizer.step()
 
+            # Validation #
+            self.eval()
+            valid_losses = torch.zeros(len(valid_loader))
+            for batch_idx, (parameters, context, targets, classes, reconstructed) in enumerate(valid_loader):
+                parameters: torch.Tensor = parameters.to(self.device)
+                context: torch.Tensor = context.to(self.device)
+                targets: torch.Tensor = targets.to(self.device)
+                classes: torch.Tensor = classes.to(self.device)
+                reconstructed: torch.Tensor = reconstructed.to(self.device)
+
+                reco_noisy, noise, time_step = self.create_noisy_input(reconstructed)
+                model_out: torch.Tensor = self(parameters, context, targets, classes, reco_noisy, time_step / self.n_time_steps)
+
+                loss: torch.Tensor = self.loss_mse(noise, model_out)
+                valid_losses[batch_idx] = loss.item()
+
             logger.info(
                 f"Surrogate Epoch: {epoch}\t"
-                f"Loss: {loss.item():.5f}\t"
-                f"Prediction: {','.join([f'{val.item():+.5f}' for val in self.sample_forward(parameters, context, targets, classes).mean(axis=0)])}\t"
-                f"Reconstructed: {','.join([f'{val.item():+.5f}' for val in reconstructed.mean(axis=0)])}'",
+                f"Loss: {train_losses.mean().item():8.5f}\t"
+                f"Val Loss: {valid_losses.mean().item():8.5f}\t"
+                #f"Prediction: {','.join([f'{val.item():+.5f}' for val in self.sample_forward(parameters, context, targets, classes).mean(axis=0)])}\t"
+                #f"Reconstructed: {','.join([f'{val.item():+.5f}' for val in reconstructed.mean(axis=0)])}'",
             )
-            self.surrogate_loss.append(loss.item())
+            self.surrogate_loss.append(valid_losses.mean().item())
 
         self.eval()
         return loss.item()

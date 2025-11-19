@@ -187,7 +187,7 @@ class Optimizer(torch.nn.Module):
                     ),
                     index = 4,
                 )
-                loss = torch.tensor([0.])
+                loss = torch.tensor([0.]).to(self.surrogate_model.device)
                 if dataset.reconstruction:
                     loss += reconstruction_loss(
                         dataset.unnormalize_features(targets, index=2),
@@ -199,7 +199,7 @@ class Optimizer(torch.nn.Module):
                 if dataset.classification:
                     loss += classification_loss(
                         dataset.unnormalize_features(classes, index=3),
-                        surrogate_output[:,idx_forst:]
+                        surrogate_output[:,idx_first:]
                     ).mean()
                 surrogate_loss_detached = loss.item()
                 constraints_loss = self.other_constraints(
