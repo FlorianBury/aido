@@ -1,7 +1,7 @@
 """
 Dataset for the Reconstruction model. Based on pytorch
 """
-from typing import List, Optional
+from typing import List, Optional, Tuple
 
 import numpy as np
 import pandas as pd
@@ -12,30 +12,74 @@ from torch.utils.data import Dataset
 class ReconstructionDataset(Dataset):
     def __init__(
         self,
-        input_df: pd.DataFrame,
+        targets: Tuple[str],
+        input_mf: pd.DataFrame,
         means: Optional[List[np.float32]] = None,
         stds: Optional[List[np.float32]] = None
     ):
         """Convert the files from the simulation to simple lists.
 
         Args:
-            input_df (pd.DataFrame): Must contain as first level columns:
+            input_mf (pd.DataFrame): Must contain as first level columns:
                 ["Parameters", "Inputs", "Targets", "Context"], the names of the further dimensions
                 are ignored.
 
         Returns:
             torch.DataSet
         """
-        self.df = input_df
-        self.df = self.filter_infs_and_nans(self.df)
-        self.parameters = self.df["Parameters"].to_numpy("float32")
-        self.inputs = self.df["Inputs"].to_numpy("float32")
-        self.targets = self.df["Targets"].to_numpy("float32")
-        if "Context" in self.df.columns:
-            self.context = self.df["Context"].to_numpy("float32")
-        else:
-            self.context = torch.empty(self.inputs.shape[0],0)
+        self.mf = input_mf
+        self.mf = self.filter_infs_and_nans(self.mf)
+        self.mf = self.filter_empty_events(self.mf)
 
+        self.parameters = np.concatenate(
+            [
+                self.mf['Parameters'][key].reshape(-1,1)
+                for key in self.mf['Parameters'].keys()
+            ],
+            axis = 1,
+        ).astype(np.float32)
+        self.targets = np.concatenate(
+            [
+                self.mf['Targets'][key].reshape(-1,1)
+                for key in targets
+            ],
+            axis = 1,
+        ).astype(np.float32)
+        if "Context" in self.mf.keys():
+            self.targets = np.concatenate(
+                [
+                    self.mf['Context'][key].reshape(-1,1)
+                    for key in self.mf['Context'].keys()
+                ],
+                axis = 1,
+            ).astype(np.float32)
+        else:
+            self.context = np.empty((self.targets.shape[0],0)).astype(np.float32)
+
+        # Make inputs #
+        ls  = self.mf['Inputs']['sensor_layer'].astype(np.float32)
+        zs  = self.mf['Inputs']['sensor_z'].astype(np.float32)
+        dxs = self.mf['Inputs']['sensor_dx'].astype(np.float32)
+        dys = self.mf['Inputs']['sensor_dy'].astype(np.float32)
+        dzs = self.mf['Inputs']['sensor_dz'].astype(np.float32)
+        Es  = self.mf['Inputs']['sensor_energy'].astype(np.float32)
+
+        self.inputs = []
+        for idx in np.unique(ls):
+            mask = ls==idx
+            assert np.all(mask == mask[0])
+            mask = mask[0]
+            E = Es[:,mask].sum(axis=1).reshape(-1,1)
+            z = zs[:,mask][:,:1]
+            dx = dxs[:,mask][:,:1]
+            dy = dys[:,mask][:,:1]
+            dz = dzs[:,mask][:,:1]
+            assert all(dx>0)
+            assert all(dy>0)
+            assert all(dz>0)
+            self.inputs.extend([np.log(1+E),z,dx,dy,dz])
+
+        self.inputs = np.concatenate(self.inputs,axis=1)
 
         self.shape = (
             self.parameters.shape[1],
@@ -71,18 +115,22 @@ class ReconstructionDataset(Dataset):
         self.c_means = [torch.tensor(a).to(dev) for a in self.means]
         self.c_stds = [torch.tensor(a).to(dev) for a in self.stds]
 
-    def filter_infs_and_nans(self, df: pd.DataFrame):
+    def filter_infs_and_nans(self, mf):
         '''
         Removes all events that contain infs or nans.
         '''
-        df = df.replace([np.inf, -np.inf], np.nan)
-        df = df.dropna(axis=0, ignore_index=True)
-        return df
+        for superkey, submf in mf.items():
+            for key in submf.keys():
+                mf[superkey]._data[key] = np.nan_to_num(submf[key],nan=0.,posinf=0.,neginf=0.)
+        return mf
 
-    def filter_empty_events(self, df: pd.DataFrame):
-        df = df[df["Inputs"]["sensor_energy_0"] > 0.0]
-        df = df.dropna(axis=0, ignore_index=True)
-        return df
+    def filter_empty_events(self, mf):
+        idx = np.where(mf['Inputs']['sensor_energy'].sum(axis=1)>0)[0]
+        for superkey, submf in mf.items():
+            for key in submf.keys():
+                mf[superkey]._data[key] = submf[key][idx]
+        return mf
+
 
     def unnormalize_target(self, target: torch.Tensor):
         return target * self.c_stds[2] + self.c_means[2]

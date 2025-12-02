@@ -39,6 +39,7 @@ def training_loop(
         reco_file_paths_dict: dict | str | os.PathLike,
         reconstruction_loss_function: Callable[[torch.Tensor, torch.Tensor], torch.Tensor],
         classification_loss_function: Callable[[torch.Tensor, torch.Tensor], torch.Tensor],
+        iteration: int,
         constraints: None | Callable[[SimulationParameterDictionary], float | torch.Tensor] = None,
         ):
 
@@ -64,7 +65,6 @@ def training_loop(
     parameter_dict = SimulationParameterDictionary.from_json(parameter_dict_input_path)
     surrogate_df = pd.read_parquet(output_df_path)
     train_df, valid_df = train_test_split(surrogate_df, test_size=0.2,random_state=42)
-
 
     if os.path.isfile(surrogate_save_path):
         surrogate: Surrogate = torch.load(surrogate_save_path,weights_only=False)
@@ -124,6 +124,8 @@ def training_loop(
             )
             surrogate = Surrogate(
                 *surrogate_train_dataset.shape,
+                n_time_steps = config.surrogate.n_time_steps,
+                betas = config.surrogate.betas,
                 initial_means = surrogate_train_dataset.means,
                 initial_stds = surrogate_train_dataset.stds,
             )
@@ -161,20 +163,34 @@ def training_loop(
             lr = 0.0001,
         )
 
-    torch.save(surrogate, surrogate_save_path)
+        torch.save(surrogate, surrogate_save_path)
 
-    # Validation
-    surrogate_validator = SurrogateValidation(surrogate)
-    train_df = surrogate_validator.validate(surrogate_train_dataset)
-    valid_df = surrogate_validator.validate(surrogate_valid_dataset)
-    surrogate_validator.plot(
-        train_df,
-        fig_savepath=os.path.join(results_dir, "plots", "validation", "surrogate", "on_trainingData.png"),
-    )
-    surrogate_validator.plot(
-        valid_df,
-        fig_savepath=os.path.join(results_dir, "plots", "validation", "surrogate", "on_validationData.png"),
-    )
+        # Validation
+        surrogate_validator = SurrogateValidation(surrogate)
+        train_df = surrogate_validator.validate(surrogate_train_dataset)
+        surrogate_validator.plot(
+            train_df,
+            fig_savepath = os.path.join(
+                results_dir,
+                "plots",
+                "validation",
+                "surrogate",
+                "on_trainingData",
+                f"validation_{iteration}.png",
+            ),
+        )
+        valid_df = surrogate_validator.validate(surrogate_valid_dataset)
+        surrogate_validator.plot(
+            valid_df,
+            fig_savepath = os.path.join(
+                results_dir,
+                "plots",
+                "validation",
+                "surrogate",
+                "on_validationData",
+                f"validation_{iteration}.png",
+            ),
+        )
 
 
 
@@ -193,16 +209,29 @@ def training_loop(
         normalize_parameters = False,
     )
 
+    optimizer_lr = config.optimizer.lr * config.optimizer.gamma ** iteration
+    if iteration >= config.optimizer.iteration_start_reco:
+        alpha_reco = config.optimizer.alpha_reco
+    else:
+        alpha_reco = 0.
+    if iteration >= config.optimizer.iteration_start_class:
+        alpha_class = config.optimizer.alpha_class
+    else:
+        alpha_class = 0.
+
     updated_parameter_dict, is_optimal = optimizer.optimize(
-        surrogate_model=surrogate,
-        dataset=surrogate_dataset,
-        batch_size=config.optimizer.batch_size,
-        n_epochs=config.optimizer.n_epochs,
-        reconstruction_loss=reconstruction_loss_function,
-        classification_loss=classification_loss_function,
-        additional_constraints=constraints,
-        parameter_optimizer_savepath=parameter_optimizer_savepath,
-        lr=config.optimizer.lr
+        surrogate_model = surrogate,
+        dataset = surrogate_dataset,
+        batch_size = config.optimizer.batch_size,
+        n_epochs = config.optimizer.n_epochs,
+        alpha_reco = alpha_reco,
+        alpha_class = alpha_class,
+        reconstruction_loss = reconstruction_loss_function,
+        classification_loss = classification_loss_function,
+        additional_constraints = constraints,
+        parameter_optimizer_savepath = parameter_optimizer_savepath,
+        lr = optimizer_lr,
+        end_factor = config.optimizer.end_factor,
     )
     if not is_optimal:
         raise RuntimeError

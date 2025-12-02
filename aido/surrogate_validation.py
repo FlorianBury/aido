@@ -62,7 +62,7 @@ class SurrogateValidation():
             validation_energy = validation_df["Reconstructed"]["true_energy"].values
             surrogate_energy = validation_df["Surrogate"]["true_energy"].values
 
-            bins = np.linspace(0, max([true_energy.max(),validation_energy.max(),surrogate_energy.max()]), 40 + 1)
+            bins = np.linspace(0, max([true_energy.max(),validation_energy.max(),surrogate_energy.max()]), 50 + 1)
             axs[0,0].hist(
                 [validation_energy, surrogate_energy, true_energy],
                 bins=bins,
@@ -106,8 +106,8 @@ class SurrogateValidation():
 
 
         if 'true_logits_0' in validation_df['Surrogate'].columns:
-            columns = validation_df["Classes"].columns
-            for i in range(ncols):
+            columns = list(validation_df["Classes"].columns)
+            for i in range(ncols-idx_first_plot):
                 j = i + idx_first_plot
                 name = columns[i].replace('contains:','')
                 true_class = validation_df["Classes"][f"{columns[i]}"].values * 1
@@ -116,7 +116,7 @@ class SurrogateValidation():
                 bins = np.linspace(
                     min([validation_logits.min(),surrogate_logits.min()]),
                     max([validation_logits.max(),surrogate_logits.max()]),
-                    40 + 1,
+                    50 + 1,
                 )
                 axs[0,j].hist(
                     [validation_logits[true_class==0], surrogate_logits[true_class==0]],

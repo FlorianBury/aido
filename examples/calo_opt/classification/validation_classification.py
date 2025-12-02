@@ -1,5 +1,6 @@
 from typing import Union
 
+from copy import deepcopy
 import matplotlib
 import matplotlib.pyplot as plt
 from sklearn.metrics import roc_curve, auc
@@ -8,6 +9,7 @@ import pandas as pd
 import torch
 
 from .model import Classification, ClassificationDataset
+from minipandas import MiniFrame
 
 matplotlib.use("agg")
 
@@ -42,33 +44,36 @@ class ClassificationValidation():
             original Classification model's training dataset.
             batch_size (int): Batch size for validation
         """
+        val_dataset.augmentations = []
         val_result, val_loss, _ = self.class_model.apply_model_in_batches(val_dataset, batch_size=batch_size)
+        output_mf = deepcopy(val_dataset.mf)
+        del output_mf._data['Inputs']
 
-        validation_df = pd.DataFrame({
-            f"true_logits_{i}": val_result[:,i]
-            for i in range(val_result.shape[-1])
-        })
-        validation_df = pd.concat({"Reconstructed": validation_df}, axis=1)
-        loss_df_val = pd.DataFrame({"Class_loss": val_loss.tolist()})
-        loss_df_val = pd.concat({"Loss": loss_df_val}, axis=1)
-        output_df_val: pd.DataFrame = pd.concat([val_dataset.df, validation_df, loss_df_val], axis=1)
-        return output_df_val
+        reco_mf = MiniFrame(
+            {
+                f"true_logits_{i}": val_result[:,i]
+                for i in range(val_result.shape[-1])
+            }
+        )
+        output_mf.add('Reconstructed',reco_mf)
+        output_mf.add('Loss',MiniFrame({'Class_loss':val_loss}))
+        return output_mf
 
     @classmethod
-    def plot(cls, validation_df: pd.DataFrame, fig_savepath: Union[str, None]) -> None:
+    def plot(cls, validation_mf: pd.DataFrame, fig_savepath: Union[str, None]) -> None:
 
-        columns = list(validation_df["Classes"].columns)
+        columns = list(validation_mf["Classes"].keys())
         names = [col.replace('contains:','') for col in columns]
         reco = np.concatenate(
             [
-                validation_df["Reconstructed"][f"true_logits_{i}"].values.reshape(-1,1)
+                validation_mf["Reconstructed"][f"true_logits_{i}"].reshape(-1,1)
                 for i in range(len(columns))
             ],
             axis = 1,
         ) # logits
         true = np.concatenate(
             [
-                validation_df["Classes"][col].values.reshape(-1,1)
+                validation_mf["Classes"][col].reshape(-1,1)
                 for col in columns
             ],
             axis = 1,
@@ -89,7 +94,7 @@ class ClassificationValidation():
             axs[i,0].set_ylim(1e-1,y_max*20)
             axs[i,0].legend()
 
-            fpr, tpr, _= roc_curve(true[:,i],reco[:,i])
+            fpr, tpr, _= roc_curve(true[:,i].astype(np.float32),reco[:,i])
 
             axs[i,1].plot(
                 tpr,

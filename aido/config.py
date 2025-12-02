@@ -1,24 +1,32 @@
 import json
 from dataclasses import asdict, dataclass, field
-from typing import Any, Dict
+from typing import Any, Dict, List, Tuple
 
 from aido.logger import logger
 
 
 @dataclass
 class OptimizerConfig:
-    lr: float = 0.01
-    batch_size: int = 512
+    lr: float = 0.02
+    end_factor: float = 0.05
+    gamma: float = 0.99
+    batch_size: int = 1024
     n_epochs: int = 50
-
+    alpha_reco: float = 1.
+    alpha_class: float = 10.
+    iteration_start_reco: int = 0
+    iteration_start_class: int = 20
 
 @dataclass
 class SurrogateConfig:
-    n_epoch_pre: int = 100
-    n_epochs_main: int = 100
-    batch_size: int = 256
-    reconstruction: bool = False
+    n_epoch_pre: int = 50
+    n_epochs_main: int = 50
+    batch_size: int = 1024
+    betas: Tuple = (1e-4,0.5)
+    n_time_steps: int = 100
+    reconstruction: bool = True
     classification: bool = True
+
 
 
 @dataclass

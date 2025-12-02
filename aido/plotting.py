@@ -153,9 +153,9 @@ class Plotting:
             plt.figure(figsize=(8, 6), dpi=400)
             plt.plot(df_loss["Scaled Epoch"], df_loss["Loss"], c="k", label="optimizer_loss")
             plt.xlabel("Iteration", loc="right")
-            plt.xlim(0, df_loss["Iteration"].to_numpy()[-1])
             plt.xlabel("Epoch", loc="right")
             plt.ylabel("Loss", loc="top")
+            plt.yscale('log')
             plt.legend()
             plt.savefig(fig_savepath)
             plt.close()
@@ -396,6 +396,6 @@ class Plotting:
             ax.vlines(self.x_right, 0.0, self.height_absolute, color=color, linestyles=linestyles, **kwargs)
             return ax
 
-
-
-
+if __name__ == '__main__':
+    import sys
+    Plotting.plot(results_dir=sys.argv[1])

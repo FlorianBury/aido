@@ -1,5 +1,6 @@
 import os
 import re
+import json
 from typing import Dict, Iterable, List
 
 import pandas as pd
@@ -9,7 +10,7 @@ from calo_opt.reconstruction.model import Reconstruction
 from calo_opt.classification.model import Classification
 
 import aido
-
+from .config import CaloConfig
 
 class CaloOptInterface(aido.UserInterfaceBase):
     """ This class is an example of how to implement the 'AIDOUserInterface' class.
@@ -26,6 +27,22 @@ class CaloOptInterface(aido.UserInterfaceBase):
     container_extra_flags: str = ""  # place extra flags for singularity here
     verbose: bool = False
 
+    def __init__(self,config):
+        self._results_dir = None
+        self.config = config
+
+    @property
+    def results_dir(self):
+        return self._results_dir
+
+    @results_dir.setter
+    def results_dir(self,value):
+        assert isinstance(value,str)
+        assert os.path.exists(value)
+        assert self._results_dir is None
+        self._results_dir = value
+        self.config.to_json(os.path.join(self._results_dir,'calo.json'))
+
     @property
     def suppress_output(self) -> str:
         return "> /dev/null 2>&1" if not self.verbose else ""
@@ -36,78 +53,6 @@ class CaloOptInterface(aido.UserInterfaceBase):
             examples/calo_opt/simulation.py {parameter_dict_path} {sim_output_path} {self.suppress_output}"
         )
         return None
-
-    def convert_sim_to_reco(
-            parameter_dict_path: Dict | str,
-            simulation_output_df: pd.DataFrame | str,
-            input_keys: List[str],
-            reco_target_keys: List[str],
-            class_target_keys: List[str],
-            context_keys: List[str] | None = None
-            ):
-        """
-        This is a helper function specific to the CaloOpt example. Converts the files from the simulation
-        to a pandas dataframe.
-
-        Args:
-            parameter_dict (dict or file path str): Instance of or file path to Parameter Dictionary.
-            simulation_output_df (pd.DataFrame or file path str): Instance of or file path to pd.DataFrame
-            input_keys (list of keys in df): Keys of input features to be used by the model.
-            target_keys (list of keys in df): Keys of target features of the reconstruction model.
-            context_keys (list of keys in df): (Optional) Keys of additional information for each
-                event.
-
-        Returns:
-            pd.DataFrame:A DataFrame containing the simulation parameter list, input features, and
-            target features, context features.
-        """
-        def wildcard_to_regex(pattern):
-            regex = re.escape(pattern)
-            regex = regex.replace(r'\*', '.*').replace(r'\?', '.')
-            return f'^{regex}$'
-
-        def expand_keys(keys,colums):
-            if len(keys) == 0:
-                return []
-            regex = re.compile("|".join(wildcard_to_regex(key) for key in keys))
-            return [col for col in columns if regex.match(col)]
-
-
-        def expand_columns(df: pd.DataFrame) -> pd.DataFrame:
-            """ Check if columns in df are lists and flatten them by replacing those
-            columns with <column_name>_{i} for i in index of the list.
-            """
-            for column in df.columns:
-                item = df[column][0]
-
-                if isinstance(item, Iterable):
-                    column_list = df[column].tolist()
-                    expanded_df = pd.DataFrame(column_list, index=df.index)
-                    expanded_df.columns = [f'{column}_{i}' for i in expanded_df.columns]
-                    df = pd.concat([df.drop(columns=column), expanded_df], axis=1)
-
-            return df
-
-        if isinstance(simulation_output_df, str):
-            #input_df: pd.DataFrame = pd.read_parquet(simulation_output_df)
-            input_df: pd.DataFrame = dd.read_parquet(simulation_output_df)
-        columns = input_df.columns
-
-        parameter_dict = aido.SimulationParameterDictionary.from_json(parameter_dict_path)
-
-        df_combined_dict = {
-            "Parameters": parameter_dict.to_df(len(input_df), display_discrete="as_one_hot"),
-            "Inputs": expand_columns(input_df[expand_keys(input_keys,columns)].compute()),
-            "Targets": expand_columns(input_df[expand_keys(reco_target_keys,columns)].compute()),
-            "Classes": expand_columns(input_df[expand_keys(class_target_keys,columns)].compute()),
-            "Context": expand_columns(input_df[expand_keys(context_keys,columns)].compute())
-        }
-        df: pd.DataFrame = pd.concat(
-            df_combined_dict.values(),
-            keys=df_combined_dict.keys(),
-            axis=1
-        )
-        return df
 
     def merge(
             self,
@@ -121,45 +66,32 @@ class CaloOptInterface(aido.UserInterfaceBase):
         if os.path.exists(reco_input_path):
             print (f'File {reco_input_path} already exists, will not merge')
             return None
-        df_list: List[pd.DataFrame] = []
 
-        print ('Loading simulations')
-        for idx,simulation_output_path in enumerate(zip(parameter_dict_file_paths, simulation_file_paths)):
-            print (f'... {simulation_output_path[1]} [{idx+1}/{len(simulation_file_paths)}]')
-            df_list.append(
-                type(self).convert_sim_to_reco(
-                    *simulation_output_path,
-                    input_keys=[
-                        'sensor_energy',
-                        #'sensor_x',
-                        #'sensor_y',
-                        #'sensor_z',
-                        #'sensor_dx',
-                        #'sensor_dy',
-                        #'sensor_dz',
-                        'sensor_layer'
-                    ],
-                    reco_target_keys=["true_energy"],
-                    class_target_keys=["contains:e+"],
-                    context_keys=[''],
-                )
-            )
-        print (f'Concatenating {len(df_list)} dataframes')
-        df: pd.DataFrame = pd.concat(df_list, axis=0, ignore_index=True)
-        df = df.fillna(0)
-        df = df.reset_index(drop=True)
-        print (f'Writing dataframe to {reco_input_path}')
-        df.to_parquet(reco_input_path, index=range(len(df)))
-        print (f'Dataset for training : {df.shape}')
+        # First turn the parameter dict in dict of values saved for later miniframes #
+        parameter_values_file_paths = []
+        for parameter_dict_file_path in parameter_dict_file_paths:
+            parameter_dict = aido.SimulationParameterDictionary.from_json(parameter_dict_file_path)
+            parameter_values = parameter_dict.to_df(display_discrete="as_one_hot").iloc[0].to_dict()
+            parameter_values_file_path = parameter_dict_file_path.replace('param_dict.json','param_dict_values.json')
+            parameter_values_file_paths.append(parameter_values_file_path)
+            with open(parameter_values_file_path,'w') as handle:
+                json.dump(parameter_values,handle)
+
+        # Calls the merge inside singularity container to use miniframe #
+        os.system(
+            f"singularity exec {self.container_extra_flags} {self.container_path} python3 \
+            examples/calo_opt/merge.py {self.results_dir}/calo.json {reco_input_path} {' '.join(parameter_values_file_paths)} {' '.join(simulation_file_paths)}"
+        )
         return None
 
     def reconstruct(self, reco_input_path: str, reco_output_path: str, is_validation: bool):
         """ Start your reconstruction algorithm from a local container.
         """
+        assert self.results_dir is not None
         os.system(
             f"singularity exec --nv {self.container_extra_flags} {self.container_path} \
             python3 examples/calo_opt/train.py \
-            {reco_input_path} {reco_output_path} {is_validation} {self.results_dir}"
+            {self.results_dir}/calo.json {reco_input_path} {reco_output_path} {is_validation} {self.results_dir}"
         )
         os.system("rm -f *.pkl")
         return None
@@ -168,4 +100,4 @@ class CaloOptInterface(aido.UserInterfaceBase):
         return Reconstruction.loss(y, y_pred)
 
     def classification_loss(self, y: torch.Tensor, y_pred: torch.Tensor) -> torch.Tensor:
-        return Classification.loss(y, y_pred)
+        return Classification.loss(y, y_pred, self.config.classification.multiclass, torch.tensor(self.config.classification.weight))

@@ -9,22 +9,24 @@ from .dataset import ClassificationDataset
 
 
 class ResidualBlock(nn.Module):
-    def __init__(self, in_channels, out_channels, kernel_size):
+    def __init__(self, in_channels, out_channels, kernel_size, dilation=1):
         super().__init__()
 
         self.in_channels = in_channels
         self.out_channels = out_channels
         self.kernel_size = kernel_size
 
+        in_groups = self.get_groups(self.in_channels)
+        out_groups = self.get_groups(self.out_channels)
+
         # Pre-activation block
         self.block = nn.Sequential(
-            nn.BatchNorm2d(in_channels),
+            nn.GroupNorm(in_groups, in_channels),
             nn.ReLU(),
-            nn.Conv2d(in_channels, out_channels, kernel_size, padding="same"),
-
-            nn.BatchNorm2d(out_channels),
+            nn.Conv2d(in_channels, out_channels, kernel_size, dilation=dilation, padding="same"),
+            nn.GroupNorm(out_groups, out_channels),
             nn.ReLU(),
-            nn.Conv2d(out_channels, out_channels, kernel_size, padding="same"),
+            nn.Conv2d(out_channels, out_channels, kernel_size, dilation=dilation, padding="same"),
         )
 
         # Skip projection if channels change
@@ -35,6 +37,18 @@ class ResidualBlock(nn.Module):
 
         self.final_relu = nn.ReLU()
 
+    @staticmethod
+    def get_groups(channels):
+        if channels <= 2:
+            groups = 1
+        elif channels <= 4:
+            groups = 2
+        elif channels <= 8:
+            groups = 4
+        else:
+            groups = 8
+        return groups
+
     def forward(self, x):
         out = self.block(x)
         skip = self.skip(x)
@@ -42,34 +56,53 @@ class ResidualBlock(nn.Module):
 
 
 class CNNBlocks(nn.Module):
-    def __init__(self, channels, dense_net=False, dropout=0.):
+    def __init__(self, channels, output_dim, dense_net=False, pooling_dim=1, dropout=0.):
         super().__init__()
         self.dense_net = dense_net
+        self.pooling_dim = pooling_dim
 
-        self.block1 = ResidualBlock(channels, channels*2, kernel_size=3)
-        self.block2 = ResidualBlock(channels*2, channels*4, kernel_size=5)
-        self.block3 = ResidualBlock(channels*4, channels*8, kernel_size=7)
+        self.blocks = nn.ModuleList(
+            [
+                ResidualBlock(channels, 4, kernel_size=3, dilation=1),
+                ResidualBlock(4, 8, kernel_size=3, dilation=2),
+                ResidualBlock(8, 16, kernel_size=5, dilation=1),
+            ]
+        )
 
         self.dropout = nn.Dropout(p=dropout)
-        self.aggr = nn.AdaptiveAvgPool2d((1,1))
+        self.avg_aggr = nn.AdaptiveAvgPool2d((self.pooling_dim,self.pooling_dim))
+        self.max_aggr = nn.AdaptiveMaxPool2d((self.pooling_dim,self.pooling_dim))
+
+        self.layer = nn.Sequential(
+            nn.Linear(self.out_channels,output_dim*2),
+            nn.ReLU(),
+            nn.Dropout(dropout),
+            nn.Linear(output_dim*2,output_dim),
+        )
 
     @property
     def out_channels(self):
         if self.dense_net:
-            return self.block1.out_channels + self.block2.out_channels + self.block3.out_channels
+            channels = sum([
+                block.out_channels
+                for block in self.blocks
+            ])
         else:
-            return self.block3.out_channels
+            channels = self.blocks[-1].out_channels
+        return channels * self.pooling_dim**2 * 2
 
     def forward(self, x):
-        h1 = self.block1(x)
-        h2 = self.block2(h1)
-        h3 = self.block3(h2)
+        hs = [x]
+        for block in self.blocks:
+            hs.append(block(hs[-1]))
         if self.dense_net:
-            x = torch.cat([h1,h2,h3],axis=1)
+            x = torch.cat(hs[1:],dim=1)
         else:
-            x = h3
+            x = hs[-1]
         x = self.dropout(x)
-        x = self.aggr(x).squeeze()
+        x = torch.cat([self.avg_aggr(x),self.max_aggr(x)],dim=1)
+        x = x.view(x.size(0), -1)
+        x = self.layer(x)
         return x
 
 class Classification(nn.Module):
@@ -81,6 +114,8 @@ class Classification(nn.Module):
         num_context_features: int,
         initial_means: List[np.float32],
         initial_stds: List[np.float32],
+        multiclass: bool = False,
+        weight: Tuple[float] = None,
         device: str = "cuda" if torch.cuda.is_available() else "cpu",
     ):
         """Initialize the shape of the model.
@@ -99,17 +134,16 @@ class Classification(nn.Module):
         self.n_context_features = num_context_features
         self.means = initial_means
         self.stds = initial_stds
+        self.multiclass = multiclass
+        self.weight = torch.tensor(weight) if weight is not None else None
+        if self.multiclass:
+            print ('Model initialised for multiclassification (one label per event)')
 
         self.param_layers = nn.Sequential(
+            nn.BatchNorm1d(self.n_parameters + self.n_context_features),
             nn.Linear(self.n_parameters + self.n_context_features, 64),
-            nn.BatchNorm1d(64),
             nn.ReLU(),
-            nn.Linear(64, 64),
-            nn.BatchNorm1d(64),
-            nn.ReLU(),
-            nn.Linear(64,64),
-            nn.BatchNorm1d(64),
-            nn.ReLU(),
+            nn.Dropout(0.1),
             nn.Linear(64, 32),
         )
         out_dim = 32
@@ -117,17 +151,19 @@ class Classification(nn.Module):
         self.input_layers = []
         for input_features in self.n_input_features:
             if len(input_features) == 3:
-                blocks = CNNBlocks(input_features[0],dense_net=False)
+                blocks = CNNBlocks(
+                    channels = input_features[0],
+                    output_dim = 32,
+                    dense_net = False,
+                    pooling_dim = 5,
+                    dropout = 0.3,
+                )
                 self.input_layers.append(blocks)
-                out_dim += blocks.out_channels
+                out_dim += 32
             elif len(input_features) == 1:
                 self.input_layers.append(
                     nn.Sequential(
                         nn.Linear(input_features[0],32),
-                        nn.BatchNorm1d(32),
-                        nn.ReLU(),
-                        nn.Linear(32,32),
-                        nn.BatchNorm1d(32),
                         nn.ReLU(),
                         nn.Linear(32,16),
                     )
@@ -138,19 +174,15 @@ class Classification(nn.Module):
         self.input_layers = nn.ModuleList(self.input_layers)
 
         self.final_layers = nn.Sequential(
-            nn.Linear(out_dim, 100),
-            nn.BatchNorm1d(100),
+            nn.Linear(out_dim,32),
             nn.ReLU(),
-            nn.Linear(100, 100),
-            nn.BatchNorm1d(100),
-            nn.ReLU(),
-            nn.Linear(100,100),
-            nn.BatchNorm1d(100),
-            nn.ReLU(),
-            nn.Linear(100, num_target_features),
+            nn.Dropout(0.1),
+            nn.Linear(32, num_target_features),
         )
-        self.optimizer = torch.optim.Adam(self.parameters(), lr=0.0001, weight_decay=1e-3)
+        self.optimizer = torch.optim.Adam(self.parameters(), lr=0.0001, weight_decay=1e-4)
         self.device = torch.device(device)
+
+        self.print_children_params()
 
 
     def forward(self, parameters, x, c) -> torch.Tensor:
@@ -169,11 +201,18 @@ class Classification(nn.Module):
         return self.final_layers(x)
 
     @staticmethod
-    def loss(y: torch.Tensor, y_pred: torch.Tensor) -> torch.Tensor:
+    def loss(y: torch.Tensor, y_pred: torch.Tensor, multiclass: bool, weight: torch.Tensor = None) -> torch.Tensor:
         assert y_pred.shape == y.shape, f'y has shape {y.shape}, but y_pred has shape {y_pred.shape}'
-        loss = nn.BCEWithLogitsLoss()(y_pred,y)
-        if loss.dim() == 2 and loss.shape[1] > 1:
-            loss = loss.mean(dim=-1)
+        if weight is not None:
+            assert len(weight) == y_pred.shape[1]
+        if multiclass:
+            loss = nn.CrossEntropyLoss(reduction='none',weight=weight.to(y_pred.device))(y_pred,y)
+        else:
+            loss = nn.BCEWithLogitsLoss(reduction='none')(y_pred,y)
+            if loss.dim() == 2 and loss.shape[1] > 1:
+                if weight is not None:
+                    loss = loss * weight.to(loss.device)
+                loss = loss.mean(dim=-1)
         return loss
 
     def train_model(
@@ -186,9 +225,10 @@ class Classification(nn.Module):
         plotter = None,
         early_stopping = None,
     ):
-        if early_stopping.early_stop:
+        if early_stopping is not None and early_stopping.early_stop:
             return
         print(f"Classification Training: {lr=}, {batch_size=}")
+        print (f"Multiclass {self.multiclass}")
         train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
         valid_loader = DataLoader(valid_dataset, batch_size=batch_size*10, shuffle=False)
 
@@ -207,8 +247,7 @@ class Classification(nn.Module):
                 c: torch.Tensor = c.to(self.device)
                 y: torch.Tensor = y.to(self.device)
                 y_pred: torch.Tensor = self(detector_parameters, x, c)
-                loss_per_event = self.loss(y,y_pred)
-                loss = loss_per_event.clone().mean()
+                loss = self.loss(y,y_pred,self.multiclass,self.weight).mean()
                 train_losses[batch_idx] = loss.item()
                 self.optimizer.zero_grad()
                 loss.backward()
@@ -222,8 +261,7 @@ class Classification(nn.Module):
                 c: torch.Tensor = c.to(self.device)
                 y: torch.Tensor = y.to(self.device)
                 y_pred: torch.Tensor = self(detector_parameters, x, c)
-                loss_per_event = self.loss(y,y_pred)
-                loss = loss_per_event.clone().mean()
+                loss = self.loss(y,y_pred,self.multiclass,self.weight).mean()
                 valid_losses[batch_idx] = loss.item()
 
             print(f"Class Epoch: {epoch:4d} - Loss: {train_losses.mean():8.3f} - Val loss {valid_losses.mean():8.3f}")
@@ -231,10 +269,11 @@ class Classification(nn.Module):
                 plotter.add_value('Loss (training)',train_losses.mean())
                 plotter.add_value('Loss (validation)',valid_losses.mean())
                 plotter.add_value('lr',lr)
-            early_stopping(valid_losses.mean(),self)
-            if early_stopping.early_stop:
-                print ('Early stopping')
-                break
+            if early_stopping is not None:
+                early_stopping(valid_losses.mean(),self)
+                if early_stopping.early_stop:
+                    print ('Early stopping')
+                    break
 
         self.eval()
 
@@ -260,16 +299,25 @@ class Classification(nn.Module):
             x: List[torch.Tensor] = [ix.to(self.device) for ix in x]
             c: torch.Tensor = c.to(self.device)
             y: torch.Tensor = y.to(self.device)
-            y_pred: torch.Tensor = self(detector_parameters, x, c)
+            with torch.no_grad():
+                y_pred: torch.Tensor = self(detector_parameters, x, c)
+            loss = self.loss(y,y_pred,self.multiclass,self.weight)
+            mean_loss += loss.mean().item()
 
-            loss_per_event = self.loss(y,y_pred)
-            loss = loss_per_event.clone().mean()
-            mean_loss += loss.item()
-
-            results[batch_idx * batch_size: (batch_idx + 1) * batch_size] = y_pred
-            loss_array[batch_idx * batch_size: (batch_idx + 1) * batch_size] = loss_per_event.flatten()
+            results[batch_idx * batch_size: (batch_idx + 1) * batch_size] = y_pred.cpu()
+            loss_array[batch_idx * batch_size: (batch_idx + 1) * batch_size] = loss.flatten().cpu()
 
         mean_loss /= len(data_loader)
-        results = results.detach().cpu().numpy()
-        loss_array = loss_array.detach().cpu().numpy()
-        return results, loss_array, mean_loss
+        return results.numpy(), loss_array.numpy(), mean_loss
+
+    def print_children_params(self):
+        print("\nParameters in top-level submodules:")
+        print("----------------------------------")
+        total = 0
+        for name, module in self.named_children():
+            params = sum(p.numel() for p in module.parameters() if p.requires_grad)
+            print(f"{name:20s}: {params:,}")
+            total += params
+        print("----------------------------------")
+        print(f"Total trainable params: {total:,}\n")
+

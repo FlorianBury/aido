@@ -1,5 +1,6 @@
 from typing import Union
 
+from copy import deepcopy
 import matplotlib
 import matplotlib.pyplot as plt
 import numpy as np
@@ -7,6 +8,7 @@ import pandas as pd
 import torch
 
 from .model import Reconstruction, ReconstructionDataset
+from minipandas import MiniFrame
 
 matplotlib.use("agg")
 
@@ -42,19 +44,19 @@ class ReconstructionValidation():
             batch_size (int): Batch size for validation
         """
         val_result, val_loss, _ = self.reco_model.apply_model_in_batches(val_dataset, batch_size=batch_size)
+        output_mf = deepcopy(val_dataset.mf)
+        del output_mf._data['Inputs']
 
-        validation_df = pd.DataFrame({"true_energy": val_result})
-        validation_df = pd.concat({"Reconstructed": validation_df}, axis=1)
-        loss_df_val = pd.DataFrame({"Reco_loss": val_loss.tolist()})
-        loss_df_val = pd.concat({"Loss": loss_df_val}, axis=1)
-        output_df_val: pd.DataFrame = pd.concat([val_dataset.df, validation_df, loss_df_val], axis=1)
-        return output_df_val
+        reco_mf = MiniFrame({"true_energy": val_result})
+        output_mf.add('Reconstructed',reco_mf)
+        output_mf.add('Loss',MiniFrame({'Reco_loss':val_loss}))
+        return output_mf
 
     @classmethod
     def plot(cls, validation_df: pd.DataFrame, fig_savepath: Union[str, None]) -> None:
 
-        reco = validation_df["Reconstructed"]["true_energy"].values
-        true = validation_df["Targets"]["true_energy"].values
+        reco = validation_df["Reconstructed"]["true_energy"]
+        true = validation_df["Targets"]["true_energy"]
 
         fig, axs = plt.subplots(ncols=2,figsize=(9,4))
         bins = np.linspace(

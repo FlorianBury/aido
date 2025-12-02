@@ -1,7 +1,10 @@
 """
-Dataset for the Reconstruction model. Based on pytorch
+Dataset for the Classification model. Based on pytorch
 """
-from typing import List, Optional
+import os
+import sys
+import random
+from typing import List, Optional, Tuple
 import math
 import numpy as np
 import pandas as pd
@@ -11,118 +14,204 @@ import matplotlib
 import matplotlib.pyplot as plt
 
 
+class FlipAugmentation:
+    def __call__(self,imgs):
+        axis = random.randint(0,2)
+        if axis == 0:
+            return imgs
+        else:
+            return [
+                np.flip(img, axis=axis)
+                for img in imgs
+            ]
+
+class RotationAugmentation:
+    def __call__(self,imgs):
+        k = random.randint(0,3)
+        return [
+            np.rot90(img, k=k, axes=(1,2))
+            for img in imgs
+        ]
+
+class ShiftAugmentation:
+    def __call__(self,imgs):
+        dx = random.randint(-3,3)
+        dy = random.randint(-3,3)
+        return self.shift_images(imgs,dx,dy)
+
+    @staticmethod
+    def shift_images(imgs,dx,dy):
+        imgs = [
+            np.roll(img, shift=dy, axis=1)
+            for img in imgs
+        ]
+        imgs = [
+            np.roll(img, shift=dx, axis=2)
+            for img in imgs
+        ]
+        if dy > 0:
+            for i in range(len(imgs)):
+                imgs[i][:,:dy,:] = 0.
+        if dy < 0:
+            for i in range(len(imgs)):
+                imgs[i][:,dy:,:] = 0.
+        if dx > 0:
+            for i in range(len(imgs)):
+                imgs[i][:,:,:dx] = 0.
+        if dx < 0:
+            for i in range(len(imgs)):
+                imgs[i][:,:,dx:] = 0.
+        return imgs
+
 
 class ClassificationDataset(Dataset):
     def __init__(
         self,
-        input_df: pd.DataFrame,
+        classes: Tuple[str],
+        input_mf: pd.DataFrame,
         means: Optional[List[np.float32]] = None,
-        stds: Optional[List[np.float32]] = None
+        stds: Optional[List[np.float32]] = None,
+        augmentations: List = [],
     ):
-        """Convert the files from the simulation to simple lists.
+        self.mf = input_mf
+        self.mf = self.filter_infs_and_nans(self.mf)
+        self.mf = self.filter_empty_events(self.mf)
 
-        Args:
-            input_df (pd.DataFrame): Must contain as first level columns:
-                ["Parameters", "Inputs", "Targets", "Context"], the names of the further dimensions
-                are ignored.
-
-        Returns:
-            torch.DataSet
-        """
-        self.df = input_df
-        #self.df = self.filter_infs_and_nans(self.df)
-        print ('params')
-        self.parameters = self.df["Parameters"].to_numpy("float32")
-        self.targets = self.df["Classes"].to_numpy("float32")
-        if "Context" in self.df.columns:
-            self.context = self.df["Context"].to_numpy("float32")
+        self.parameters = np.concatenate(
+            [
+                self.mf['Parameters'][key].reshape(-1,1)
+                for key in self.mf['Parameters'].keys()
+            ],
+            axis = 1,
+        ).astype(np.float32)
+        self.targets = np.concatenate(
+            [
+                self.mf['Classes'][key].reshape(-1,1)
+                for key in classes
+            ],
+            axis = 1,
+        ).astype(np.float32)
+        if "Context" in self.mf.keys():
+            self.targets = np.concatenate(
+                [
+                    self.mf['Context'][key].reshape(-1,1)
+                    for key in self.mf['Context'].keys()
+                ],
+                axis = 1,
+            ).astype(np.float32)
         else:
-            self.context = torch.empty(self.targets.shape[0],0)
-        print ('done')
+            self.context = np.empty((self.targets.shape[0],0))
 
-        #self.inputs = self.df["Inputs"].to_numpy("float32").reshape(-1,3,8)
-        #self.inputs = [self.inputs[:,0],self.inputs[:,1],self.inputs[:,2]]
+        # Augmentations #
+        self.augmentations = augmentations
 
         # Crop params #
-        crop_size = 32
+        self.crop_size = 25
 
-        # Get layers #
-        print ('inputs')
-        N_sensors = len([col for col in self.df['Inputs'] if 'sensor_layer' in col])
-        layer_indices = np.unique(self.df['Inputs'][[col for col in self.df['Inputs'] if 'sensor_layer' in col]])
+        # Get inputs #
+        ls  = self.mf['Inputs']['sensor_layer'].astype(np.float32)
+        xs  = self.mf['Inputs']['sensor_x'].astype(np.float32)
+        ys  = self.mf['Inputs']['sensor_y'].astype(np.float32)
+        zs  = self.mf['Inputs']['sensor_z'].astype(np.float32)
+        dxs = self.mf['Inputs']['sensor_dx'].astype(np.float32)
+        dys = self.mf['Inputs']['sensor_dy'].astype(np.float32)
+        dzs = self.mf['Inputs']['sensor_dz'].astype(np.float32)
+        Es  = self.mf['Inputs']['sensor_energy'].astype(np.float32)
 
-        ls  = self.df['Inputs'][[f'sensor_layer_{i}' for i in range(N_sensors)]].to_numpy("float32")
-        #xs  = self.df['Inputs'][[f'sensor_x_{i}' for i in range(N_sensors)]].to_numpy("float32")
-        #ys  = self.df['Inputs'][[f'sensor_y_{i}' for i in range(N_sensors)]].to_numpy("float32")
-        #zs  = self.df['Inputs'][[f'sensor_z_{i}' for i in range(N_sensors)]].to_numpy("float32")
-        #dxs = self.df['Inputs'][[f'sensor_dx_{i}' for i in range(N_sensors)]].to_numpy("float32")
-        #dys = self.df['Inputs'][[f'sensor_dy_{i}' for i in range(N_sensors)]].to_numpy("float32")
-        #dzs = self.df['Inputs'][[f'sensor_dz_{i}' for i in range(N_sensors)]].to_numpy("float32")
-        Es  = self.df['Inputs'][[f'sensor_energy_{i}' for i in range(N_sensors)]].to_numpy("float32")
-        #Es = np.where(Es>0,np.log(Es),0)
-        print ('done')
+        # True #
+        self.particle_energy = self.mf['Targets']['true_energy']
 
-        self.inputs = []
-        for idx in layer_indices:
+        # Make images #
+        self.E_imgs = []
+        self.x_imgs = []
+        self.y_imgs = []
+        for idx in np.unique(ls):
             mask = ls==idx
             assert np.all(mask == mask[0])
             mask = mask[0]
-            #x  = xs[:,mask]
-            #y  = ys[:,mask]
-            #z  = zs[:,mask]
-            #dx = dxs[:,mask]
-            #dy = dys[:,mask]
-            #dz = dzs[:,mask]
-            E  = Es[:,mask]
+            E = Es[:,mask]
+            x = xs[:,mask]
+            y = ys[:,mask]
+            z = zs[:,mask][:,:1]
+            # should be the same for each x,y
+            dx = dxs[:,mask][:,:1]
+            dy = dys[:,mask][:,:1]
+            dz = dzs[:,mask][:,:1]
+            assert all(dx>0)
+            assert all(dy>0)
+            assert all(dz>0)
+            # Add tot energy as context #
+            self.context = np.concatenate(
+                [
+                    self.context,
+                    np.log(1+E.sum(axis=-1,keepdims=True)),
+                    z,
+                    dx,
+                    dy,
+                    dz,
+                ],
+                axis=1,
+            ).astype(np.float32)
 
             if E.shape[-1] > 1:
                 # granular image #
                 width = int(math.sqrt(E.shape[-1]))
                 assert width*width == E.shape[-1]
-                #x = x.reshape(-1,1,width,width)
-                #y = y.reshape(-1,1,width,width)
-                #z = z.reshape(-1,1,width,width)
-                #dz = dz.reshape(-1,1,width,width)
-                E = E.reshape(-1,1,width,width)
+                E = E.reshape(-1,width,width)
+                x = x.reshape(-1,width,width)
+                y = y.reshape(-1,width,width)
 
-                # crop and center
-                if crop_size is not None:
-                    cropped_Es = np.zeros((E.shape[0],1,crop_size,crop_size),dtype=np.float32)
-                    losses = np.zeros(E.shape[0])
-                    print (f'Cropping images of layer {idx}')
-                    for i in range(E.shape[0]):
-                        img = E[i,0]
-                        center = self.shower_centroid(img)
-                        if center is not None:
-                            cropped_img = self.crop_around_center(img, center, size=crop_size)
-                        else:
-                            cropped_img = np.zeros((crop_size,crop_size))
-                        if cropped_img.sum() > 0:
-                            losses[i] = (img.sum()-cropped_img.sum())/img.sum()
-                        cropped_Es[i,0,:,:] = cropped_img
-                    print (f'Layer {idx}: cropped {E.shape[2]}x{E.shape[3]} -> {crop_size}x{crop_size}: losses = {losses.mean()*100:5.3f}% +/- {losses.std()*100:5.3f}%')
-                    E = cropped_Es
+            self.E_imgs.append(E)
+            self.x_imgs.append(x)
+            self.y_imgs.append(y)
 
-            # Preprocess energy #
-            eps = 1e-6
-            E = E / (E.sum(axis=(2,3),keepdims=True)+eps)
-            E = np.log(E+eps)
+        # Center and crop images #
+        self.centroids = self.shower_centroids(self.E_imgs,self.x_imgs,self.y_imgs)
+        E_imgs_cropped = [
+            self.crop_and_center_images(
+                imgs = Es,
+                xs = xs,
+                ys = ys,
+                centers = self.centroids,
+                size = self.crop_size,
+            ).astype(np.float32)
+            if Es.ndim == 3 else Es
+            for Es,xs,ys in zip(self.E_imgs,self.x_imgs,self.y_imgs)
+        ]
 
-            self.inputs.append(
-                np.concatenate(
-                    [
-                        E,
-                    ],
-                    axis = 1,
-                ),
-            )
+        # Make inputs #
+        self.inputs = []
+        for E_img in E_imgs_cropped:
+            if E_img.ndim == 3:
+                # normalise and scale
+                E_img = E_img / (E_img.sum(axis=(1,2),keepdims=True) + 1e-9)
+                E_img = np.expand_dims(E_img,axis=1)
+                self.inputs.append(
+                    np.concatenate(
+                        [
+                            E_img ** 0.25,
+                            (E_img>0).astype(np.float32), # binary mask for empty cells
+                        ],
+                        axis = 1,
+                    ),
+                )
+            else:
+                self.inputs.append(np.log(1+E_img))
 
-
+        # Make means and stds #
         if means is None:
             self.means = [
                 self.parameters.mean(axis=0),
                 [
-                    (inputs.mean(axis=(0,2,3)) if inputs.ndim==4 else inputs.mean(axis=0)).reshape(1,-1)
+                    np.array(
+                        [
+                            inputs[:,0][inputs[:,0] > 0].mean(), # energy
+                            0., # bit mask
+                        ],
+                        dtype = np.float32,
+                    )
+                    if inputs.ndim==4
+                    else inputs.mean(axis=0)
                     for inputs in self.inputs
                 ],
                 self.context.mean(axis=0),
@@ -133,7 +222,15 @@ class ClassificationDataset(Dataset):
             self.stds = [
                 self.parameters.std(axis=0) + 1e-10,
                 [
-                    (inputs.std(axis=(0,2,3)) if inputs.ndim==4 else inputs.std(axis=0)).reshape(1,-1) + 1e-10
+                    np.array(
+                        [
+                            inputs[:,0][inputs[:,0] > 0].std() + 1e-10, # energy
+                            1., # bit mask
+                        ],
+                        dtype = np.float32,
+                    )
+                    if inputs.ndim==4
+                    else inputs.mean(axis=0)
                     for inputs in self.inputs
                 ],
                 self.context.std(axis=0) + 1e-10,
@@ -142,12 +239,8 @@ class ClassificationDataset(Dataset):
             self.stds = stds
 
 
-        #self.parameters = self.normalize(self.parameters,self.means[0],self.stds[0])
-        self.inputs = [
-            self.normalize(inputs, self.means[1][i], self.stds[1][i])
-            for i,inputs in enumerate(self.inputs)
-        ]
-        self.context = self.normalize(self.context,self.means[2],self.stds[2])
+        # inputs standardisation is done at __getitem__ level (to allow augmentations)
+        self.context = (self.context - self.means[2]) / self.stds[2]
 
         self.shape = (
             self.parameters.shape[1],
@@ -160,59 +253,50 @@ class ClassificationDataset(Dataset):
 #        self.c_means = [torch.tensor(a).to(dev) for a in self.means]
 #        self.c_stds = [torch.tensor(a).to(dev) for a in self.stds]
 
-    def normalize(self,tensor,means,stds):
-        if tensor.ndim == 2:
-            out = (tensor - means.reshape(1,-1)) / stds.reshape(1,-1)
-        elif tensor.ndim == 4:
-            out = (tensor - means.reshape(1,tensor.shape[1],1,1)) / stds.reshape(1,tensor.shape[1],1,1)
-        else:
-            raise NotImplementedError
-        out[:,(stds<=1e-10).ravel()] = 0.
-        return out
+    @staticmethod
+    def shower_centroids(imgs,xs,ys):
+        imgx_total = np.zeros(imgs[0].shape[0])
+        imgy_total = np.zeros(imgs[0].shape[0])
+        img_total  = np.zeros(imgs[0].shape[0])
+        for img,x,y in zip(imgs,xs,ys):
+            if img.ndim == 3:
+                imgx_total += (img * x).sum(axis=(1,2))
+                imgy_total += (img * y).sum(axis=(1,2))
+                img_total  += img.sum(axis=(1,2))
+        return imgx_total / (img_total+1e-9), imgy_total / (img_total+1e-9)
 
     @staticmethod
-    def bounding_box(img):
-        rows = np.any(img != 0, axis=1)
-        cols = np.any(img != 0, axis=0)
+    def layer_centroid(centroid,x,y):
+        dist2 = (x-centroid[0])**2 + (y-centroid[1])**2
+        y_pix,x_pix = np.unravel_index(np.argmin(dist2), dist2.shape)
+        return x_pix,y_pix
 
-        if not rows.any() or not cols.any():
-            return 0 # image is entirely zero
+    def crop_and_center_images(self,imgs,xs,ys,centers,size):
+        cropped_imgs = np.zeros((imgs.shape[0],size,size))
+        losses = np.zeros(imgs.shape[0])
+        for i in range(imgs.shape[0]):
+            center = self.layer_centroid(
+                centroid = (centers[0][i],centers[1][i]),
+                x = xs[i],
+                y = ys[i],
+            )
+            cropped_imgs[i] = self.crop_and_center_image(
+                img = imgs[i],
+                center = center,
+                size = size,
+            )
+            losses[i] = (imgs[i].sum()-cropped_imgs[i].sum()) / (imgs[i].sum()+1e-9)
 
-        rmin, rmax = np.where(rows)[0][[0, -1]]
-        cmin, cmax = np.where(cols)[0][[0, -1]]
-        return max(rmax-rmin,cmax-cmin)
+        print (f'Crop {imgs.shape[1]}x{imgs.shape[2]} -> {size}x{size}: losses = {losses.mean()*100:5.3f}% +/- {losses.std()*100:5.3f}%')
+        return cropped_imgs
+
 
     @staticmethod
-    def shower_centroid(img):
-        """
-        Computes the energy-weighted centroid (x_cog, y_cog) of a 2D calorimeter image.
-        Assumes img is a 2D numpy array.
-        """
+    def crop_and_center_image(img, center, size):
         H, W = img.shape
-        ys, xs = np.indices((H, W))
-
-        total = img.sum()
-        if total == 0:
-            return None  # no hits
-
-        x_cog = (img * xs).sum() / total
-        y_cog = (img * ys).sum() / total
-
-        return y_cog, x_cog  # (row, col)
-
-    @staticmethod
-    def crop_around_center(img, center, size):
-        """
-        Crops a square of side `size` centered on (y, x).
-        Automatically pads if the crop goes out of bounds.
-        img: 2D numpy array
-        center: (y, x)
-        size: crop size (e.g. 32 or 64)
-        """
-        H, W = img.shape
-        y, x = center
-        y = int(round(y))
+        x, y = center
         x = int(round(x))
+        y = int(round(y))
 
         half = size // 2
 
@@ -242,18 +326,22 @@ class ClassificationDataset(Dataset):
 
         return crop
 
-    def filter_infs_and_nans(self, df: pd.DataFrame):
+
+    def filter_infs_and_nans(self, mf):
         '''
         Removes all events that contain infs or nans.
         '''
-        df = df.replace([np.inf, -np.inf], np.nan)
-        df = df.dropna(axis=0, ignore_index=True)
-        return df
+        for superkey, submf in mf.items():
+            for key in submf.keys():
+                mf[superkey]._data[key] = np.nan_to_num(submf[key],nan=0.,posinf=0.,neginf=0.)
+        return mf
 
-    def filter_empty_events(self, df: pd.DataFrame):
-        df = df[df["Inputs"]["sensor_energy_0"] > 0.0]
-        df = df.dropna(axis=0, ignore_index=True)
-        return df
+    def filter_empty_events(self, mf):
+        idx = np.where(mf['Inputs']['sensor_energy'].sum(axis=1)>0)[0]
+        for superkey, submf in mf.items():
+            for key in submf.keys():
+                mf[superkey]._data[key] = submf[key][idx]
+        return mf
 
 #    def unnormalize_detector(self, detector: torch.Tensor):
 #        return detector * self.c_stds[1] + self.c_means[1]
@@ -264,92 +352,160 @@ class ClassificationDataset(Dataset):
     def __len__(self) -> int:
         return len(self.targets)
 
-    def __getitem__(self, idx: int):
-        return self.parameters[idx], [inputs[idx] for inputs in self.inputs], self.context[idx], self.targets[idx]
+    def normalize_img(self,img,means,stds):
+        assert img.ndim == 3
+        out = (img- means.reshape(-1,1,1)) / stds.reshape(-1,1,1)
+        return out
 
-    def plot(self, idx, size=None):
-        if isinstance(idx,int):
-            idx = [idx]
-        N_sensors = len([col for col in self.df['Inputs'] if 'sensor_layer' in col])
-        ls  = self.df['Inputs'].iloc[idx][[f'sensor_layer_{i}' for i in range(N_sensors)]].to_numpy("float32")[0]
-        xs  = self.df['Inputs'].iloc[idx][[f'sensor_x_{i}' for i in range(N_sensors)]].to_numpy("float32")[0]
-        ys  = self.df['Inputs'].iloc[idx][[f'sensor_y_{i}' for i in range(N_sensors)]].to_numpy("float32")[0]
-        dxs = self.df['Inputs'].iloc[idx][[f'sensor_dx_{i}' for i in range(N_sensors)]].to_numpy("float32")[0]
-        dys = self.df['Inputs'].iloc[idx][[f'sensor_dy_{i}' for i in range(N_sensors)]].to_numpy("float32")[0]
-        Es  = self.df['Inputs'].iloc[idx][[f'sensor_energy_{i}' for i in range(N_sensors)]].to_numpy("float32").sum(axis=0)
-        if Es.sum() == 0:
+    def __getitem__(self, idx: int):
+        imgs = [inputs[idx] for inputs in self.inputs]
+
+        for augmentaton in self.augmentations:
+            imgs = augmentaton(imgs)
+
+        imgs = [
+            self.normalize_img(img,self.means[1][i],self.stds[1][i])
+            for i,img in enumerate(imgs)
+        ]
+
+        return self.parameters[idx], imgs, self.context[idx], self.targets[idx]
+
+    def plot(self, idx, size=None,figname=None):
+        E_imgs = [
+            E_img[idx]
+            for E_img in self.E_imgs
+        ]
+        x_imgs = [
+            x_img[idx]
+            for x_img in self.x_imgs
+        ]
+        y_imgs = [
+            y_img[idx]
+            for y_img in self.y_imgs
+        ]
+        tot_E = sum([E_img.sum() for E_img in E_imgs])
+        if tot_E == 0:
             print ('No measured energy')
             return
-        E_min = Es[Es>0].min()
-        E_max = Es[Es>0].max()
+        E_min = min([E_img[E_img>0].min() for E_img in E_imgs if E_img.sum()>0])
+        E_max = max([E_img[E_img>0].max() for E_img in E_imgs if E_img.sum()>0])
 
-        layers = np.unique(ls)
-        N = len(layers)
+        if size is not None:
+            centroid = self.shower_centroids(
+                imgs = [E_img[None,:,:] for E_img in E_imgs],
+                xs = [x_img[None,:,:] for x_img in x_imgs],
+                ys = [y_img[None,:,:] for y_img in y_imgs],
+            )
+            E_imgs_cropped = [
+                self.crop_and_center_image(
+                    img = Es,
+                    center = self.layer_centroid(
+                        centroid = centroid,
+                        x = xs,
+                        y = ys,
+                    ),
+                    size = size,
+                )
+                if Es.ndim == 2 else Es
+                for Es,xs,ys in zip(E_imgs,x_imgs,y_imgs)
+            ]
+            x_imgs_cropped = [
+                self.crop_and_center_image(
+                    img = xs,
+                    center = self.layer_centroid(
+                        centroid = centroid,
+                        x = xs,
+                        y = ys,
+                    ),
+                    size = size,
+                )
+                if xs.ndim == 2 else xs
+                for xs,ys in zip(x_imgs,y_imgs)
+            ]
+            y_imgs_cropped = [
+                self.crop_and_center_image(
+                    img = ys,
+                    center = self.layer_centroid(
+                        centroid = centroid,
+                        x = xs,
+                        y = ys,
+                    ),
+                    size = size,
+                )
+                if ys.ndim == 2 else ys
+                for xs,ys in zip(x_imgs,y_imgs)
+            ]
+            E_imgs = E_imgs_cropped
+            x_imgs = x_imgs_cropped
+            y_imgs = y_imgs_cropped
+
+        N = len(E_imgs)
         fig,axs = plt.subplots(ncols=N,figsize=(6*N,5))
-        plt.suptitle(f'Target = {self.targets[idx]}')
+        plt.suptitle(f'Target = {self.targets[idx]} [true energy = {self.particle_energy[idx]:.3f} GeV]',fontsize=18)
+        plt.subplots_adjust(left=0.05,right=0.95,wspace=0.3)
         if not isinstance(axs,np.ndarray):
             axs = np.array([axs])
-        for i,j in enumerate(layers):
-            x = xs[ls==j]
-            y = ys[ls==j]
-            dx = dxs[ls==j]
-            dy = dys[ls==j]
-            E = Es[ls==j]
-            width = int(math.sqrt(len(x)))
-            assert width*width == len(x)
-            x = x.reshape(width,width)
-            y = y.reshape(width,width)
-            E = E.reshape(width,width)
-            if E.ndim == 1:
-                E = E[:,np.newaxis,np.newaxis]
-            if size is not None:
-                center = self.shower_centroid(E)
-                if center is not None:
-                    E = self.crop_around_center(E, center, size=size)
-                    x = self.crop_around_center(x, center, size=size)
-                    y = self.crop_around_center(y, center, size=size)
+        for i in range(N):
+            E = E_imgs[i]
+            x = x_imgs[i]
+            y = y_imgs[i]
+            dx = x[int(x.shape[0]//2),int(x.shape[1])//2+1] - x[int(x.shape[0]//2),int(x.shape[1])//2]
+            dy = y[int(y.shape[0]//2)+1,int(y.shape[1])//2] - y[int(y.shape[0]//2),int(y.shape[1])//2]
+            assert dx > 0
+            assert dy > 0
+            if E.ndim != 2:
+                E = np.expand_dims(E,axis=1)
             im = axs[i].imshow(
                 E,
-                extent = [x.min()-dx.min(),x.max()+dx.max(),y.min()-dy.min(),y.max()+dy.max()],
+                extent = [x.min()-dx,x.max()+dx,y.min()-dy,y.max()+dy],
                 norm = matplotlib.colors.LogNorm(vmin=E_min,vmax=E_max),
                 origin='lower',
             )
-            fig.colorbar(im, ax=axs[i])
+            axs[i].set_xlabel('x [mm]',fontsize=16)
+            axs[i].set_ylabel('y [mm]',fontsize=16)
+            cbar = fig.colorbar(im, ax=axs[i], shrink=0.9)
+            cbar.set_label('Energy deposit [MeV]',fontsize=16)
             axs[i].set_title(f'Layer {i}')
         plt.show()
+        if figname is not None:
+            fig.savefig(figname)
+            print (f'Saved as {figname}')
 
 
 if __name__ == '__main__':
-    import sys
-    dataset = ClassificationDataset(pd.read_parquet(sys.argv[1]))
+    import pathlib
+    sys.path.append(os.path.abspath(pathlib.Path(__file__).parent.parent))
+    from merge import SuperMiniFrame
+    dataset = ClassificationDataset(SuperMiniFrame.read_pickle(sys.argv[1]))
 
-    fig,axs = plt.subplots(ncols=len(dataset.inputs),figsize=(5*len(dataset.inputs),4))
-    for i in range(len(dataset.inputs)):
-        imgs = dataset.inputs[i]
-        e_imgs = imgs[dataset.targets==1]
-        g_imgs = imgs[dataset.targets==0]
-        e_frac = (e_imgs>0).sum(axis=(1,2)) / (e_imgs.shape[1]*e_imgs.shape[2])
-        g_frac = (g_imgs>0).sum(axis=(1,2)) / (g_imgs.shape[1]*g_imgs.shape[2])
-        bins = np.linspace(0,max([e_frac.max(),g_frac.max()]),100)
-        axs[i].hist(
-            e_frac,
-            bins = bins,
-            color = 'blue',
-            histtype = 'step',
-            label = 'e'
-        )
-        axs[i].hist(
-            g_frac,
-            bins = bins,
-            color = 'red',
-            histtype = 'step',
-            label = r'$\gamma$'
-        )
-        axs[i].set_yscale('log')
-        axs[i].set_xlabel('Fraction of non-empty cells')
-        axs[i].set_title(f'Layer {i}')
-        axs[i].legend()
-    plt.show()
-
+#    fig,axs = plt.subplots(ncols=len(dataset.inputs),figsize=(5*len(dataset.inputs),4))
+#    for i in range(len(dataset.inputs)):
+#        imgs = dataset.inputs[i][:,0,:,:]
+#        e_imgs = imgs[(dataset.targets==1).ravel()]
+#        g_imgs = imgs[(dataset.targets==0).ravel()]
+#        e_frac = (e_imgs>0).sum(axis=(1,2)) / (e_imgs.shape[1]*e_imgs.shape[2])
+#        g_frac = (g_imgs>0).sum(axis=(1,2)) / (g_imgs.shape[1]*g_imgs.shape[2])
+#        bins = np.linspace(0,max([e_frac.max(),g_frac.max()]),100)
+#        axs[i].hist(
+#            e_frac,
+#            bins = bins,
+#            color = 'blue',
+#            histtype = 'step',
+#            label = 'e'
+#        )
+#        axs[i].hist(
+#            g_frac,
+#            bins = bins,
+#            color = 'red',
+#            histtype = 'step',
+#            label = r'$\gamma$'
+#        )
+#        axs[i].set_yscale('log')
+#        axs[i].set_xlabel('Fraction of non-empty cells')
+#        axs[i].set_title(f'Layer {i}')
+#        axs[i].legend()
+#    fig.savefig('e_fraction.png')
+#    plt.show()
+#
 
     from IPython import embed; embed()

@@ -1,9 +1,11 @@
 from typing import List, Tuple
 
+import math
 import numpy as np
 import pandas as pd
 import torch
 from torch.utils.data import DataLoader, Dataset
+from torch import nn
 
 from aido.logger import logger
 
@@ -37,7 +39,7 @@ def ddpm_schedules(beta1: float, beta2: float, n_time_steps: int) -> dict[str, t
     }
 
 
-class NoiseAdder(torch.nn.Module):
+class NoiseAdder(nn.Module):
 
     def __init__(self, n_time_steps: int, betas=(1e-4, 0.02)):
         super().__init__()
@@ -130,7 +132,7 @@ class SurrogateDataset(Dataset):
                 self.parameters.mean(axis=0),
                 self.context.mean(axis=0),
                 self.targets.mean(axis=0),
-                np.ones(self.classes.shape[1],dtype=self.classes.dtype) * 0.5,
+                np.zeros(self.classes.shape[1],dtype=self.classes.dtype),
                 self.reconstructed.mean(axis=0),
             ]
         else:
@@ -141,7 +143,7 @@ class SurrogateDataset(Dataset):
                 self.parameters.std(axis=0) + 1e-10,
                 self.context.std(axis=0) + 1e-10,
                 self.targets.std(axis=0) + 1e-10,
-                np.ones(self.classes.shape[1],dtype=self.classes.dtype) / 2,
+                np.ones(self.classes.shape[1],dtype=self.classes.dtype),
                 self.reconstructed.std(axis=0) + 1e-10,
             ]
         else:
@@ -228,8 +230,57 @@ class SurrogateDataset(Dataset):
     def __len__(self) -> int:
         return len(self.reconstructed)
 
+def sinusoidal_embedding(timesteps, dim):
+    """
+    timesteps: (batch,) integer or float tensor
+    dim: embedding dimension, must be even
 
-class Surrogate(torch.nn.Module):
+    returns: (batch, dim)
+    """
+    half = dim // 2
+    emb = math.log(10000) / (half - 1)
+    emb = torch.exp(torch.arange(half, device=timesteps.device) * -emb)
+    emb = timesteps[:, None] * emb[None, :]
+    emb = torch.cat([torch.sin(emb), torch.cos(emb)], dim=1)
+    return emb
+
+class TimeEmbedding(nn.Module):
+    def __init__(self, dim):
+        super().__init__()
+        self.dim = dim
+        self.mlp = nn.Sequential(
+            nn.Linear(dim, dim * 4),
+            nn.SiLU(),
+            nn.Linear(dim * 4, dim)
+        )
+
+    def forward(self, t):
+        emb = sinusoidal_embedding(t, self.dim)
+        return self.mlp(emb)
+
+
+class Embedding(nn.Module):
+    def __init__(self, dim_in, dim):
+        super().__init__()
+        if dim_in > 0:
+            self.dim = dim
+            self.mlp = nn.Sequential(
+                nn.Linear(dim_in, dim * 4),
+                nn.SiLU(),
+                nn.Linear(dim * 4, dim)
+            )
+        else:
+            self.dim = 0
+            self.mlp = None
+
+    def forward(self, x):
+        if self.mlp is not None:
+            return self.mlp(x)
+        else:
+            return x
+
+
+class Surrogate(nn.Module):
     """ Surrogate model class and the surrogate model training function, given a dataset consisting of events.
     The surrogate model itself can be very simple. It is just a feed-forward model but used as a diffusion model.
 
@@ -262,7 +313,7 @@ class Surrogate(torch.nn.Module):
             initial_means: List[np.float32],
             initial_stds: List[np.float32],
             n_time_steps: int = 100,
-            betas: Tuple[float] = (1e-4, 0.02),
+            betas: Tuple[float] = (1e-4, 0.2),
             ):
         """
         Initializes the surrogate model.
@@ -285,38 +336,42 @@ class Surrogate(torch.nn.Module):
         self.num_reconstructed = num_reconstructed
         self.means = initial_means
         self.stds = initial_stds
-        self.layers = torch.nn.Sequential(
-            torch.nn.Linear(
-                self.num_parameters
-                + self.num_context
-                + self.num_targets
-                + self.num_classes
-                + self.num_reconstructed
-                + 1,
-                100,
+
+        self.parameter_embedding = Embedding(self.num_parameters, dim=32)
+        self.context_embedding = Embedding(self.num_context, dim=32)
+        self.targets_embedding = Embedding(self.num_targets, dim=32)
+        self.classes_embedding = Embedding(self.num_classes, dim=32)
+        self.reconstructed_embedding = Embedding(self.num_reconstructed, dim=32)
+        self.time_embedding = TimeEmbedding(dim=32)
+        self.layers = nn.Sequential(
+            nn.Linear(
+                self.parameter_embedding.dim
+                + self.context_embedding.dim
+                + self.targets_embedding.dim
+                + self.classes_embedding.dim
+                + self.reconstructed_embedding.dim
+                + self.time_embedding.dim,
+                512,
             ),
-            torch.nn.ELU(),
-            #torch.nn.BatchNorm1d(100),
-            #torch.nn.Linear(100, 100),
-            #torch.nn.ELU(),
-            #torch.nn.BatchNorm1d(100),
-            torch.nn.Linear(100, 100),
-            torch.nn.ELU(),
-            #torch.nn.BatchNorm1d(100),
-            torch.nn.Linear(100, 100),
-            torch.nn.ELU(),
-            #torch.nn.BatchNorm1d(100),
-            torch.nn.Linear(100, self.num_reconstructed),
+            nn.SiLU(),
+            nn.Linear(512, 512),
+            nn.SiLU(),
+            nn.Linear(512, 512),
+            nn.SiLU(),
+            nn.Linear(512, 512),
+            nn.SiLU(),
+            nn.Linear(512, 512),
+            nn.SiLU(),
+            nn.Linear(512, self.num_reconstructed),
         )
 
         self.optimizer = torch.optim.Adam(self.parameters(), lr=0.01)
-        self.loss_mse = torch.nn.MSELoss()
+        self.loss_mse = nn.MSELoss()
         self.surrogate_loss = []
         self.n_time_steps = n_time_steps
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.t_is = torch.tensor([i / self.n_time_steps for i in range(self.n_time_steps + 1)]).to(self.device)
         self.best_surrogate_loss = 1e10
-        print ('using',self.n_time_steps,betas)
 
         for k, v in ddpm_schedules(*betas, n_time_steps).items():
             self.register_buffer(k, v)
@@ -343,12 +398,12 @@ class Surrogate(torch.nn.Module):
         return self.layers(
             torch.cat(
                 [
-                    parameters,
-                    context,
-                    targets,
-                    classes,
-                    reconstructed,
-                    time_step.view(-1, 1)
+                    self.parameter_embedding(parameters),
+                    self.context_embedding(context),
+                    self.targets_embedding(targets),
+                    self.classes_embedding(classes),
+                    self.reconstructed_embedding(reconstructed),
+                    self.time_embedding(time_step),
                 ],
                 dim=1
             )
@@ -413,7 +468,7 @@ class Surrogate(torch.nn.Module):
 
         for i in range(self.n_time_steps, 0, -1):
             t_is = self.t_is[i]
-            t_is = t_is.repeat(n_sample, 1)
+            t_is = t_is.repeat(n_sample)
             z = torch.clamp(torch.randn(n_sample, 1),-5.,+5.).to(self.device) if i > 1 else 0
 
             # Split predictions and compute weighting
@@ -543,7 +598,7 @@ class Surrogate(torch.nn.Module):
         for i_o in range(oversample):
 
             for batch_idx, (parameters, context, targets, classes, _reconstructed) in enumerate(data_loader):
-                logger.info(f'Surrogate batch: {batch_idx} / {len(data_loader)}')
+                logger.info(f'Surrogate batch: {batch_idx+1} / {len(data_loader)}')
                 parameters: torch.Tensor = parameters.to(self.device)
                 context: torch.Tensor = context.to(self.device)
                 targets: torch.Tensor = targets.to(self.device)

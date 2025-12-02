@@ -130,13 +130,16 @@ class Optimizer(torch.nn.Module):
             dataset: SurrogateDataset,
             batch_size: int,
             n_epochs: int,
+            alpha_reco: float,
+            alpha_class: float,
             reconstruction_loss: Callable[[torch.Tensor, torch.Tensor], torch.Tensor],
             classification_loss: Callable[[torch.Tensor, torch.Tensor], torch.Tensor],
             additional_constraints: None | Callable[[SimulationParameterDictionary, Dict], torch.Tensor] = None,
             parameter_optimizer_savepath: str | os.PathLike | None = None,
             device: str | None = None,
             lr: float = 0.01,
-            ) -> Tuple[SimulationParameterDictionary, bool]:
+            end_factor: float = None,
+    ) -> Tuple[SimulationParameterDictionary, bool]:
         """ Perform the optimization step.
 
         1. The ParameterModule().forward() method generates new parameters.
@@ -158,9 +161,6 @@ class Optimizer(torch.nn.Module):
 
         self.starting_parameters_continuous = self.parameter_module.continuous_tensors().clone().detach()
 
-        for param_group in self.optimizer.param_groups:
-            param_group['lr'] = lr
-
         self.surrogate_model.eval()
         data_loader = DataLoader(dataset, batch_size=batch_size, shuffle=True)
 
@@ -168,9 +168,18 @@ class Optimizer(torch.nn.Module):
         self.constraints_loss = []
 
         for epoch in range(n_epochs):
-            epoch_loss = 0.0
+            epoch_tot_loss = 0.0
+            epoch_reco_loss = 0.0
+            epoch_class_loss = 0.0
+            epoch_surrogate_loss = 0.0
+            epoch_boundaries_loss = 0.0
             epoch_constraints_loss = 0.0
             stop_epoch = False
+
+            current_lr = lr * (1 - (1-end_factor) * epoch / n_epochs)
+
+            for param_group in self.optimizer.param_groups:
+                param_group['lr'] = current_lr
 
             for batch_idx, (_parameters, context, targets, classes, _reconstructed) in enumerate(data_loader):
                 context: torch.Tensor = context.to(self.device)
@@ -189,18 +198,24 @@ class Optimizer(torch.nn.Module):
                 )
                 loss = torch.tensor([0.]).to(self.surrogate_model.device)
                 if dataset.reconstruction:
-                    loss += reconstruction_loss(
+                    reco_loss = reconstruction_loss(
                         dataset.unnormalize_features(targets, index=2),
                         surrogate_output[:,0:1],
                     ).mean()
+                    loss += reco_loss * alpha_reco
                     idx_first = 1
                 else:
+                    reco_loss = None
                     idx_first = 0
                 if dataset.classification:
-                    loss += classification_loss(
+                    class_loss = classification_loss(
                         dataset.unnormalize_features(classes, index=3),
-                        surrogate_output[:,idx_first:]
+                        surrogate_output[:,idx_first:],
                     ).mean()
+                    loss += class_loss * alpha_class
+                else:
+                    class_loss = None
+
                 surrogate_loss_detached = loss.item()
                 constraints_loss = self.other_constraints(
                     additional_constraints,
@@ -226,8 +241,15 @@ class Optimizer(torch.nn.Module):
                 self.parameter_dict.update_probabilities(self.parameter_module.probabilities)
                 self.save_parameters(epoch, batch_idx, surrogate_loss_detached, parameter_optimizer_savepath)
 
-                epoch_loss += loss.item()
+                epoch_tot_loss += loss.item()
+                epoch_surrogate_loss += surrogate_loss_detached
                 epoch_constraints_loss += constraints_loss.item()
+                epoch_boundaries_loss += self.boundaries.item()
+                if reco_loss is not None:
+                    epoch_reco_loss += reco_loss
+                if class_loss is not None:
+                    epoch_class_loss += class_loss
+
 
                 if not self.check_parameters_are_local(
                     updated_parameters=self.parameter_module.continuous_tensors(),
@@ -237,17 +259,22 @@ class Optimizer(torch.nn.Module):
                     logger.error("Optimizer: Parameters are not local")
                     break
 
-            logger.info(
-                f"Optimizer Epoch: {epoch} \tLoss: {surrogate_loss_detached:.5f} (reco)\t"
-                + f"+ {(constraints_loss.item()):.5f} (constraints)\t"
-                + f"+ {(self.boundaries.item()):.5f} (boundaries)\t"
-                + f"= {loss.item():.5f} (total)"
-            )
-
-            epoch_loss /= batch_idx + 1
+            epoch_tot_loss /= batch_idx + 1
+            epoch_surrogate_loss /= batch_idx + 1
             epoch_constraints_loss /= batch_idx + 1
-            self.optimizer_loss.append(epoch_loss)
+            epoch_boundaries_loss /= batch_idx + 1
+            epoch_reco_loss /= batch_idx + 1
+            epoch_class_loss /= batch_idx + 1
+            self.optimizer_loss.append(epoch_tot_loss)
             self.constraints_loss.append(epoch_constraints_loss)
+
+            logger.info(
+                f"Optimizer Epoch: {epoch:3d} LR = {current_lr:.5f} Loss: {epoch_surrogate_loss:.5f} (surrogate)\t"
+                + f"[= {alpha_reco} * {epoch_reco_loss:.5f} (reco) + {alpha_class} * {epoch_class_loss:.5f} (class)]\t"
+                + f"+ {epoch_constraints_loss:.5f} (constraints)\t"
+                + f"+ {epoch_boundaries_loss:.5f} (boundaries)\t"
+                + f"= {epoch_tot_loss:.5f} (total)"
+            )
 
             if stop_epoch:
                 break

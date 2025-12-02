@@ -39,17 +39,14 @@ class Reconstruction(torch.nn.Module):
         self.stds = initial_stds
         self.layers = torch.nn.Sequential(
             torch.nn.Linear(num_parameters + num_input_features + num_context_features, 100),
-            torch.nn.ELU(),
-            torch.nn.BatchNorm1d(100),
+            torch.nn.ReLU(),
             torch.nn.Linear(100, 100),
-            torch.nn.ELU(),
-            torch.nn.BatchNorm1d(100),
+            torch.nn.ReLU(),
             torch.nn.Linear(100,100),
-            torch.nn.ELU(),
-            torch.nn.BatchNorm1d(100),
+            torch.nn.ReLU(),
             torch.nn.Linear(100, num_target_features),
         )
-        self.optimizer = torch.optim.Adam(self.parameters(), lr=0.0001, weight_decay=1e-6)
+        self.optimizer = torch.optim.Adam(self.parameters(), lr=0.0001, weight_decay=1e-4)
         self.device = torch.device(device)
 
 
@@ -88,7 +85,7 @@ class Reconstruction(torch.nn.Module):
         plotter = None,
         early_stopping = None,
     ):
-        if early_stopping.early_stop:
+        if early_stopping is not None and early_stopping.early_stop:
             return
         print(f"Reconstruction Training: {lr=}, {batch_size=}")
         train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
@@ -139,10 +136,11 @@ class Reconstruction(torch.nn.Module):
                 plotter.add_value('Loss (training)',train_losses.mean())
                 plotter.add_value('Loss (validation)',valid_losses.mean())
                 plotter.add_value('lr',lr)
-            early_stopping(valid_losses.mean(),self)
-            if early_stopping.early_stop:
-                print ('Early stopping')
-                break
+            if early_stopping is not None:
+                early_stopping(valid_losses.mean(),self)
+                if early_stopping.early_stop:
+                    print ('Early stopping')
+                    break
 
         self.eval()
 

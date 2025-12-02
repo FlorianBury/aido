@@ -208,6 +208,7 @@ class OptimizationTask(AIDOTask):
                     reconstruction_loss_function=interface.reconstruction_loss,
                     classification_loss_function=interface.classification_loss,
                     constraints=interface.constraints,
+                    iteration=self.iteration,
                 )
             except torch.cuda.OutOfMemoryError as e:
                 training_loop_out_of_memory = True
@@ -248,6 +249,10 @@ def start_scheduler(
     os.makedirs(f"{results_dir}/models", exist_ok=True)
     os.makedirs(f"{results_dir}/plots/validation/reco_model/on_trainingData", exist_ok=True)
     os.makedirs(f"{results_dir}/plots/validation/reco_model/on_validationData", exist_ok=True)
+    os.makedirs(f"{results_dir}/plots/validation/reco_model/losses", exist_ok=True)
+    os.makedirs(f"{results_dir}/plots/validation/class_model/on_trainingData", exist_ok=True)
+    os.makedirs(f"{results_dir}/plots/validation/class_model/on_validationData", exist_ok=True)
+    os.makedirs(f"{results_dir}/plots/validation/class_model/losses", exist_ok=True)
     os.makedirs(f"{results_dir}/plots/validation/surrogate/on_trainingData", exist_ok=True)
     os.makedirs(f"{results_dir}/plots/validation/surrogate/on_validationData", exist_ok=True)
     os.makedirs(f"{results_dir}/loss/optimizer", exist_ok=True)

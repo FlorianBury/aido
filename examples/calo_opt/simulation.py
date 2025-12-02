@@ -86,11 +86,12 @@ class Simulation():
             mfs.append(mf)
             for j in range(len(Ns)):
                 N_counts[j].append(np.full(len(mf),Ns[j],dtype='float32'))
-        df = concat(mfs, axis=0, ignore_index=True).to_pandas(indiv_cols=False)
+        mf = concat(mfs, axis=0, ignore_index=True)
         for j in range(len(N_counts)):
-            df[f'N:{names[j]}'] = np.concatenate(N_counts[j],axis=0)
-            df[f'contains:{names[j]}'] = df[f'N:{names[j]}'] > 0
-        return df
+            assert names[j] not in mf
+            mf._data[f'N:{names[j]}'] = np.concatenate(N_counts[j],axis=0)
+            mf._data[f'contains:{names[j]}'] = mf[f'N:{names[j]}'] > 0
+        return mf
 
 
 if __name__ == "__main__":
@@ -101,11 +102,7 @@ if __name__ == "__main__":
         parameter_dict = json.load(file)
 
     generator = Simulation(parameter_dict)
-    df = generator.run_simulation()
+    mf = generator.run_simulation()
 
-    for column in df.columns:
-        if df[column].dtype == "awkward":
-            df[column] = df[column].to_list()
-
-    df.to_parquet(output_path)
-    os.system("rm -f ./*.pkl")
+    mf.to_pickle(output_path)
+    #os.system("rm -f ./*.pkl")
