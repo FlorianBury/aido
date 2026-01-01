@@ -105,13 +105,13 @@ class ReconstructionTask(AIDOTask):
         Run the reconstruction process. The type of processing depends on the validation flag.
         """
         output_type = "reco" if not self.validation else "validation"
-        
+
         interface.merge(
             parameter_dict_file_paths=self.get_input_file_names("param_dict.json"),
             simulation_file_paths=self.get_input_file_names("simulation_output"),
             reco_input_path=self.get_output_file_name(f"{output_type}_input_df")
         )
-        
+
         interface.reconstruct(
             reco_input_path=self.get_output_file_name(f"{output_type}_input_df"),
             reco_output_path=self.get_output_file_name(f"{output_type}_output_df"),
