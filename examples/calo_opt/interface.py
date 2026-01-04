@@ -10,6 +10,8 @@ import torch
 
 import aido
 from .config import CaloConfig
+from .dataset import CaloGraphDataset, concat_dataset
+from .train import train
 
 class CaloOptInterface(aido.UserInterfaceBase):
     """ This class is an example of how to implement the 'AIDOUserInterface' class.
@@ -59,44 +61,40 @@ class CaloOptInterface(aido.UserInterfaceBase):
             simulation_file_paths: List[str],
             reco_input_path: str
             ):
-        """ Combines parameter dicts and pd.DataFrames into a large pd.DataFrame which is subsequently saved
-        to parquet format.
-        """
         if os.path.exists(reco_input_path):
-            print (f'File {reco_input_path} already exists, will not merge')
-            return None
-
-        # First turn the parameter dict in dict of values saved for later miniframes #
-        parameter_values_file_paths = []
-        for parameter_dict_file_path in parameter_dict_file_paths:
+            print ('Merged dataset already exists')
+            return
+        datasets = []
+        for parameter_dict_file_path,simulation_file_path in zip(parameter_dict_file_paths,simulation_file_paths):
             parameter_dict = aido.SimulationParameterDictionary.from_json(parameter_dict_file_path)
-            parameter_values = parameter_dict.to_df(display_discrete="as_one_hot").iloc[0].to_dict()
-            parameter_values_file_path = parameter_dict_file_path.replace('param_dict.json','param_dict_values.json')
-            parameter_values_file_paths.append(parameter_values_file_path)
-            with open(parameter_values_file_path,'w') as handle:
-                json.dump(parameter_values,handle)
+            params = torch.from_numpy(parameter_dict.to_df(display_discrete="as_one_hot").iloc[0].values)
 
-        # Calls the merge inside singularity container to use miniframe #
-        os.system(
-            f"singularity exec {self.container_extra_flags} {self.container_path} python3 \
-            examples/calo_opt/merge.py {self.results_dir}/calo.json {reco_input_path} {' '.join(parameter_values_file_paths)} {' '.join(simulation_file_paths)}"
-        )
+            dataset = CaloGraphDataset.load(simulation_file_path)
+            param_dataset = CaloGraphDataset.from_data_list_and_parameters(
+                [data for data in dataset],
+                params,
+            )
+            datasets.append(param_dataset)
+        dataset = concat_dataset(datasets)
+        print (f'Merged dataset with {len(dataset)} events')
+        dataset.save(reco_input_path)
+
         return None
 
     def reconstruct(self, reco_input_path: str, reco_output_path: str, is_validation: bool):
         """ Start your reconstruction algorithm from a local container.
         """
-        assert self.results_dir is not None
-        os.system(
-            f"singularity exec --nv {self.container_extra_flags} {self.container_path} \
-            python3 examples/calo_opt/train.py \
-            {self.results_dir}/calo.json {reco_input_path} {reco_output_path} {is_validation} {self.results_dir}"
+        train(
+            config_path = f" {self.results_dir}/calo.json",
+            input_graph_path = reco_input_path,
+            output_graph_path = reco_output_path,
+            isVal = is_validation,
+            results_dir = self.results_dir,
         )
-        os.system("rm -f *.pkl")
         return None
 
-    def reconstruction_loss(self, y: torch.Tensor, y_pred: torch.Tensor) -> torch.Tensor:
-        return Reconstruction.loss(y, y_pred)
-
-    def classification_loss(self, y: torch.Tensor, y_pred: torch.Tensor) -> torch.Tensor:
-        return Classification.loss(y, y_pred, self.config.classification.multiclass, torch.tensor(self.config.classification.weight))
+#    def reconstruction_loss(self, y: torch.Tensor, y_pred: torch.Tensor) -> torch.Tensor:
+#        return Reconstruction.loss(y, y_pred)
+#
+#    def classification_loss(self, y: torch.Tensor, y_pred: torch.Tensor) -> torch.Tensor:
+#        return Classification.loss(y, y_pred, self.config.classification.multiclass, torch.tensor(self.config.classification.weight))

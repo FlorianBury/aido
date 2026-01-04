@@ -9,10 +9,96 @@ from matplotlib.colors import Normalize, LogNorm
 from matplotlib.cm import ScalarMappable
 from matplotlib.colors import LinearSegmentedColormap
 
+def concat_dataset(datasets):
+    return CaloGraphDataset.from_data_list(
+        [
+            data
+            for dataset in datasets
+            for data in dataset
+        ]
+    )
+
 class CaloGraphDataset(InMemoryDataset):
-    def __init__(self,events):
+    def __init__(self,data,slices):
         super().__init__()
-        self.data, self.slices = self.collate(events)
+        self._data = data
+        self.slices = slices
+
+    @classmethod
+    def from_data_list_and_parameters(cls, data_list, parameters):
+        parameters = parameters.unsqueeze(0).to(torch.float32)
+        for data in data_list:
+            data['parameters'] = parameters.repeat_interleave(data.pos.shape[0],dim=0)
+        return cls.from_data_list(data_list)
+
+    @classmethod
+    def from_data_list(cls, data_list):
+        data,slices = cls.collate(data_list)
+        return cls(data,slices)
+
+    def save(self, path):
+        """Save only tensors needed to reconstruct the dataset."""
+        torch.save(
+            {
+                "data": self._data,
+                "slices": self.slices,
+            },
+            path,
+        )
+
+    @classmethod
+    def load(cls, path, map_location="cpu"):
+        """Load dataset saved via `save`."""
+        ckpt = torch.load(path, map_location=map_location, weights_only=False)
+        return cls(ckpt["data"],ckpt["slices"])
+
+    def get_shapes(self):
+        return {
+            key : value.shape[-1]
+            for key,value in self[0].items()
+        }
+
+    def get_input_mean(self,values):
+        if values.dim() == 1:
+            values = values.reshape(-1,1)
+        elif values.dim() == 2:
+            pass
+        else:
+            raise NotImplementedError
+        means = torch.zeros((values.shape[1],),dtype=values.dtype)
+        if not torch.is_floating_point(values):
+            return means
+        for i in range(values.shape[1]):
+            if not ((values[:,i] == 0) | (values[:,i] == 1)).all():
+                means[i] = values[:,i].mean()
+        return means
+
+    def get_input_std(self,values):
+        if values.dim() == 1:
+            values = values.reshape(-1,1)
+        elif values.dim() == 2:
+            pass
+        else:
+            raise NotImplementedError
+        stds = torch.ones((values.shape[1],),dtype=values.dtype)
+        if not torch.is_floating_point(values):
+            return stds
+        for i in range(values.shape[1]):
+            if not ((values[:,i] == 0) | (values[:,i] == 1)).all():
+                stds[i] = values[:,i].std() + 1e-10
+        return stds
+
+    def get_means(self):
+        return {
+            key : self.get_input_mean(values)
+            for key,values in self._data.items()
+        }
+
+    def get_stds(self):
+        return {
+            key : self.get_input_std(values)
+            for key,values in self._data.items()
+        }
 
     def plot(self,idx):
         data = self[idx]
@@ -26,6 +112,11 @@ class CaloGraphDataset(InMemoryDataset):
             11      : r'$e^{-}$',
             -11     : r'$e^{+}$',
             22      : r'$\gamma$',
+            111     : r'$\pi^{0}$',
+            211     : r'$\pi^{+}$',
+            -211    : r'$\pi^{-}$',
+            2212    : r'$p$',
+            2112    : r'$n$',
         }
         for typ in label_colors.keys():
             assert typ in label_dict.keys(), f'Missing {typ} in label_dict'
@@ -146,3 +237,4 @@ class CaloGraphDataset(InMemoryDataset):
 if __name__ == '__main__':
     dataset = torch.load(sys.argv[1],weights_only=False)
     dataset.plot(int(sys.argv[2]))
+    from IPython import embed; embed()

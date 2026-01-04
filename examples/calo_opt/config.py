@@ -2,41 +2,51 @@ import json
 from dataclasses import asdict, dataclass, field
 from typing import Any, Dict, List, Tuple
 
-@dataclass
-class ReconstructionConfig:
-    retrain: bool = True
-    n_epochs_pre: int = 50
-    n_epochs_main: int = 50
-    batch_size: int = 512
-    early_stopping: int = 50
-    lr_pre: float  = 1e-2
-    lr_main: Tuple[float] = (5e-3, 1e-3, 5e-4)
-    targets: Tuple[str] = (
-        'true_energy',
-    )
+from aido.logger import logger
 
 @dataclass
-class ClassificationConfig:
-    retrain: bool = True
-    n_epochs_pre: int = 20
-    n_epochs_main: int = 20
-    batch_size: int = 512
-    early_stopping: int = 20
-    lr_pre: float  = 1e-3
-    lr_main: Tuple[float] = (5e-4, 1e-4, 5e-5)
-    classes: Tuple[str] = (
-        'contains:e+',
-        #'contains:gamma',
-        #'contains:pi+',
-        #'contains:proton',
+class GraphConfig:
+    retrain: bool = False
+    inputs: Tuple[str] = (
+        "pos",
+        "E",
+        "layer",
+        "parameters",
     )
-    multiclass: bool = False
-    weight: Tuple[float] = (1.,)
+    reg_outputs : Tuple[str] = (
+        "particle_E",
+        "particle_pos",
+    )
+    cls_outputs : Tuple[str] = (
+        "particle_type",
+    )
+    loss_factors: Dict[str, float] = field(
+        default_factory = lambda : {
+            "attraction"    : 1.0,
+            "repulsion"     : 1.0,
+            "beta"          : 1.0,
+            "particle_E"    : 0.1,
+            "particle_pos"  : 0.1,
+            "particle_type" : 0.1,
+        }
+    )
+    t_beta: float = 0.1
+    t_dist: float = 0.5
+
+
+#    n_epochs_pre: int = 50
+#    n_epochs_main: int = 50
+#    batch_size: int = 512
+#    early_stopping: int = 50
+#    lr_pre: float  = 1e-2
+#    lr_main: Tuple[float] = (5e-3, 1e-3, 5e-4)
+#    targets: Tuple[str] = (
+#        'true_energy',
+#    )
 
 @dataclass
 class CaloConfig:
-    reconstruction : ReconstructionConfig = field(default_factory=ReconstructionConfig)
-    classification : ClassificationConfig = field(default_factory=ClassificationConfig)
+    graph : GraphConfig = field(default_factory=GraphConfig)
 
     @classmethod
     def from_json(cls, file_path: str):
@@ -51,8 +61,7 @@ class CaloConfig:
             return cls()
 
         return cls(
-            reconstruction = ReconstructionConfig(**data["reconstruction"]),
-            classification = ClassificationConfig(**data["classification"]),
+            graph = ReconstructionConfig(**data["graph"]),
         )
 
     def to_json(self, file_path: str):
