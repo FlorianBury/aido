@@ -70,29 +70,23 @@ if __name__ == "__main__":
     ui_interface.container_extra_flags = ""
     #ui_interface.container_extra_flags = "-B /software,/cephfs"
     ui_interface.verbose = True
-    results_dir: str = "/cephfs/dice/users/lw23382/AIDO/aido_e2e_v3"
+    results_dir: str = "/cephfs/dice/users/lw23382/AIDO/aido_e2e_v4"
 
     # Non optimizable #
     parameters = [
         aido.SimulationParameter("num_layers", num_layers, optimizable=False),
         aido.SimulationParameter("max_length", 200, optimizable=False),
         aido.SimulationParameter("max_cost", 100_000, optimizable=False),
-        aido.SimulationParameter("number_simulations_per_particle", 100, optimizable=False),
-        aido.SimulationParameter("number_stitched_events", 1000, optimizable=False),
-        aido.SimulationParameter("mean_number_particles_per_event", 5, optimizable=False),
-        aido.SimulationParameter("min_distance_cut", 0., optimizable=False),
-        aido.SimulationParameter("minEnergy_GeV", 5., optimizable=False),
-        aido.SimulationParameter("maxEnergy_GeV", 100., optimizable=False),
     ]
     # Layers #
     #granularities = np.r_[1,10:200:10,200].tolist()
     granularities = [50]
     for i in range(num_layers):
         parameters.append(
-            aido.SimulationParameter(f"thickness_absorber:{i}", 0., min_value=0., sigma=2.5),
+            aido.SimulationParameter(f"thickness_absorber:{i}", 3., min_value=0., sigma=2.5),
         )
         parameters.append(
-            aido.SimulationParameter(f"thickness_scintillator:{i}", 50., min_value=0., sigma=2.5)
+            aido.SimulationParameter(f"thickness_scintillator:{i}", 10., min_value=0., sigma=2.5)
         )
         parameters.append(
             aido.SimulationParameter(
@@ -100,7 +94,7 @@ if __name__ == "__main__":
                 "G4_Fe",
                 discrete_values=["G4_Pb", "G4_Fe"],
                 cost=[25, 4.166],
-                probabilities=[0.5, 0.5],
+                probabilities=[1.0, 0.0],
             )
         )
         parameters.append(
@@ -109,7 +103,7 @@ if __name__ == "__main__":
                 "G4_POLYSTYRENE",
                 discrete_values=["G4_PbWO4", "G4_POLYSTYRENE"],
                 cost=[2500.0, 0.01],
-                probabilities=[0.5, 0.5],
+                probabilities=[1.0, 0.0],
             )
         )
         parameters.append(
@@ -126,9 +120,9 @@ if __name__ == "__main__":
     aido.optimize(
         parameters=aido.SimulationParameterDictionary(parameters),
         user_interface=ui_interface,
-        simulation_tasks=10,
+        simulation_tasks=30,
         max_iterations=1,
-        threads=1,
+        threads=30,
         results_dir=results_dir,
         description="""
 Optimization of a sampling calorimeter with cost and length constraints.

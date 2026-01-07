@@ -1,8 +1,26 @@
 import json
 from dataclasses import asdict, dataclass, field
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List, Tuple, Union
 
 from aido.logger import logger
+
+@dataclass
+class SimulationConfig:
+    number_simulations_per_particle: int = 100
+    number_stitched_events: int = 200
+    mean_number_particles_per_event: int = 5
+    min_distance_cut : float = 5.
+    minEnergy_GeV: float = 5.
+    maxEnergy_GeV: float = 100.
+    particle_types: Tuple[str] = (
+        "e+",
+        "gamma",
+        #"pi+",
+        #"pi0",
+        #"proton",
+        #"neutron",
+    )
+
 
 @dataclass
 class GraphConfig:
@@ -11,27 +29,26 @@ class GraphConfig:
         "pos",
         "E",
         "layer",
-        "parameters",
     )
-    reg_outputs : Tuple[str] = (
-        "particle_E",
-        "particle_pos",
+    regression: Tuple[str] = (
+        #"E",
+        "pos",
     )
-    cls_outputs : Tuple[str] = (
-        "particle_type",
+    classification: Tuple[str] = (
+        #"id",
     )
     loss_factors: Dict[str, float] = field(
         default_factory = lambda : {
-            "attraction"    : 1.0,
-            "repulsion"     : 1.0,
-            "beta"          : 1.0,
-            "particle_E"    : 0.1,
-            "particle_pos"  : 0.1,
-            "particle_type" : 0.1,
+            "attraction" : 1.0,
+            "repulsion"  : 1.0,
+            "beta"       : 10.0,
+        #    "E"          : 0.1,
+            "pos"        : 10.0,
+        #    "id"         : 0.1,
         }
     )
     t_beta: float = 0.1
-    t_dist: float = 0.5
+    t_dist: float = 0.1
 
 
 #    n_epochs_pre: int = 50
@@ -47,6 +64,7 @@ class GraphConfig:
 @dataclass
 class CaloConfig:
     graph : GraphConfig = field(default_factory=GraphConfig)
+    simulation: SimulationConfig = field(default_factory=SimulationConfig)
 
     @classmethod
     def from_json(cls, file_path: str):
@@ -61,7 +79,8 @@ class CaloConfig:
             return cls()
 
         return cls(
-            graph = ReconstructionConfig(**data["graph"]),
+            graph = GraphConfig(**data["graph"]),
+            simulation = SimulationConfig(**data["simulation"]),
         )
 
     def to_json(self, file_path: str):

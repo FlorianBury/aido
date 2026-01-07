@@ -13,31 +13,31 @@ from aido.simulation_helpers import SimulationParameterDictionary
 from aido.surrogate import Surrogate, SurrogateDataset
 
 
-def pre_train(model: Surrogate, dataset: SurrogateDataset, n_epochs: int):
-    """Pre-train the Surrogate Model using a three-stage process.
-    
-    This function performs pre-training in three stages with different
-    batch sizes and learning rates to ensure stable convergence.
-    
-    Parameters
-    ----------
-    model : Surrogate
-        The surrogate model to pre-train.
-    dataset : SurrogateDataset
-        The dataset to use for training.
-    n_epochs : int
-        Number of epochs to train in each stage.
-    """
-    model.to("cuda" if torch.cuda.is_available() else "cpu")
-
-    logger.info('Surrogate: Pre-Training 0')
-    model.train_model(dataset, batch_size=512, n_epochs=n_epochs, lr=0.001)
-
-    logger.info('Surrogate: Pre-Training 1')
-    model.train_model(dataset, batch_size=1024, n_epochs=n_epochs, lr=0.001)
-
-    logger.info('Surrogate: Pre-Training 2')
-    model.train_model(dataset, batch_size=1024, n_epochs=n_epochs, lr=0.0003)
+#def pre_train(model: Surrogate, dataset: SurrogateDataset, n_epochs: int):
+#    """Pre-train the Surrogate Model using a three-stage process.
+#
+#    This function performs pre-training in three stages with different
+#    batch sizes and learning rates to ensure stable convergence.
+#
+#    Parameters
+#    ----------
+#    model : Surrogate
+#        The surrogate model to pre-train.
+#    dataset : SurrogateDataset
+#        The dataset to use for training.
+#    n_epochs : int
+#        Number of epochs to train in each stage.
+#    """
+#    model.to("cuda" if torch.cuda.is_available() else "cpu")
+#
+#    logger.info('Surrogate: Pre-Training 0')
+#    model.train_model(dataset, batch_size=512, n_epochs=n_epochs, lr=0.001)
+#
+#    logger.info('Surrogate: Pre-Training 1')
+#    model.train_model(dataset, batch_size=1024, n_epochs=n_epochs, lr=0.001)
+#
+#    logger.info('Surrogate: Pre-Training 2')
+#    model.train_model(dataset, batch_size=1024, n_epochs=n_epochs, lr=0.0003)
 
 
 def training_loop(
@@ -55,10 +55,10 @@ def training_loop(
             Tensor used as the Optimizer loss.
         constraints (Callable, optional). Additional loss function to be applied on top of the regular
             loss function, for example to account for cost penalties. Default is None
-    
+
     Returns:
         SimulationParameterDictionary: The updated values as proposed by the Optimizer model.
-    
+
     Note:
         This function is integral to the correct training of the surrogate and optimizer models. The
         training itself consists of these steps:
@@ -68,7 +68,7 @@ def training_loop(
          3. Run the Optimizer
          4. Save results
     """
-    
+
     if isinstance(reco_file_paths_dict, (str, os.PathLike)):
         with open(reco_file_paths_dict, "r") as file:
             reco_file_paths_dict = json.load(file)
@@ -136,7 +136,7 @@ def training_loop(
                 n_epochs=n_epochs_main // 2,
                 lr=0.1 * surrogate_lr,
             )
-    
+
     torch.save(surrogate, surrogate_save_path)
 
     # Optimization

@@ -247,6 +247,7 @@ def start_scheduler(
     os.makedirs(f"{results_dir}/models", exist_ok=True)
     os.makedirs(f"{results_dir}/plots/validation/reco_model/on_trainingData", exist_ok=True)
     os.makedirs(f"{results_dir}/plots/validation/reco_model/on_validationData", exist_ok=True)
+    os.makedirs(f"{results_dir}/plots/validation/reco_model/losses", exist_ok=True)
     os.makedirs(f"{results_dir}/plots/validation/surrogate/on_trainingData", exist_ok=True)
     os.makedirs(f"{results_dir}/plots/validation/surrogate/on_validationData", exist_ok=True)
     os.makedirs(f"{results_dir}/loss/optimizer", exist_ok=True)

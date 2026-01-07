@@ -6,7 +6,7 @@ from tqdm import tqdm
 import numpy as np
 import torch
 
-from torch_geometric.data import Data
+from torch_geometric.data import Data, HeteroData
 
 import numpy as np
 import pandas as pd
@@ -18,43 +18,19 @@ from dataset import CaloGraphDataset
 class Simulation():
     def __init__(
             self,
+            config: dict,
             parameter_dict: dict
         ):
+        self.config = config
         self.parameter_dict = parameter_dict
-        self.particle_types = [
-            "e-",
-            "e+",
-            "gamma",
-            #"pi+",
-            #"pi-",
-            #"pi0",
-            #"proton",
-            #"neutron",
-        ]
-        if "number_simulations_per_particle" in parameter_dict:
-            self.n_parts = parameter_dict["number_simulations_per_particle"]["current_value"]
-        else:
-            self.n_parts = 100
-        if "number_stitched_events" in parameter_dict:
-            self.n_events = parameter_dict["number_stitched_events"]["current_value"]
-        else:
-            self.n_events = 100
-        if "mean_number_particles_per_event" in parameter_dict:
-            self.mean_poisson = parameter_dict["mean_number_particles_per_event"]["current_value"]
-        else:
-            self.mean_poissoni = 1
-        if "min_distance_cut" in parameter_dict:
-            self.min_dist = parameter_dict["min_distance_cut"]["current_value"]
-        else:
-            self.min_dist = 0.
-        if "minEnergy_GeV" in parameter_dict:
-            self.minEnergy_GeV = max(1e-3,parameter_dict["minEnergy_GeV"]["current_value"])
-        else:
-            self.minEnergy_GeV = 1.
-        if "maxEnergy_GeV" in parameter_dict:
-            self.maxEnergy_GeV = max(self.minEnergy_GeV,parameter_dict["maxEnergy_GeV"]["current_value"])
-        else:
-            self.maxEnergy_GeV = min(self.minEnergy_GeV,20.)
+
+        self.n_parts = self.config['number_simulations_per_particle']
+        self.n_events = self.config['number_stitched_events']
+        self.mean_poisson = self.config['mean_number_particles_per_event']
+        self.min_dist = self.config['min_distance_cut']
+        self.minEnergy_GeV = self.config['minEnergy_GeV']
+        self.maxEnergy_GeV = self.config['maxEnergy_GeV']
+        self.particle_types = self.config['particle_types']
 
         self.cw = GeometryDescriptor()
 
@@ -95,12 +71,12 @@ class Simulation():
 
     def stitch_one_event(self,mfs):
         # sensor positions should be the same for same set of simulated parameters
-        x = torch.from_numpy(mfs[0]['sensor_x'])
-        y = torch.from_numpy(mfs[0]['sensor_y'])
-        z = torch.from_numpy(mfs[0]['sensor_z'])
-        dx = torch.from_numpy(mfs[0]['sensor_dx'])
-        dy = torch.from_numpy(mfs[0]['sensor_dy'])
-        dz = torch.from_numpy(mfs[0]['sensor_dz'])
+        x = torch.from_numpy(mfs[0]['sensor_x']) / 10
+        y = torch.from_numpy(mfs[0]['sensor_y']) / 10
+        z = torch.from_numpy(mfs[0]['sensor_z']) / 10
+        dx = torch.from_numpy(mfs[0]['sensor_dx']) / 10
+        dy = torch.from_numpy(mfs[0]['sensor_dy']) / 10
+        dz = torch.from_numpy(mfs[0]['sensor_dz']) / 10
         layer = torch.from_numpy(mfs[0]['sensor_layer'])
 
         # Concatenate particle content #
@@ -141,30 +117,43 @@ class Simulation():
         labels = torch.argmax(fracs, dim=0)
 
         # Set noise labels (-1) to hits with <5% true energy #
-        labels[fracs.max(dim=0).values < 0.05] = -1
+        #labels[fracs.max(dim=0).values < 0.05] = -1
 
         # Make mask or non-zero cells and save #
         mask = E > 0
-        event = Data(
-            # Calo info #
-            pos = torch.stack(
-                [x[mask],y[mask],z[mask]],
-                axis = -1,
-            ).to(torch.float32),
-            E = E[mask].unsqueeze(-1).to(torch.float32),
-            layer = layer[mask].unsqueeze(-1).to(torch.float32),
-            cell = torch.stack(
-                [dx[mask],dy[mask],dz[mask]],
-                axis = -1,
-            ).to(torch.float32),
-            labels = labels[mask].unsqueeze(-1).to(torch.int64),
-            # Particle info #
-            particle_pos = torch.stack(
-                [part_x,part_y],
-                axis = -1,
-            ).to(torch.float32),
-            particle_E = part_E.unsqueeze(-1).to(torch.float32),
-            particle_type = part_type.to(torch.float32),
+        event = HeteroData()
+
+        # Hit/calo info #
+        event['hits'].pos = torch.stack(
+            [x[mask],y[mask],z[mask]],
+            dim = -1,
+        ).to(torch.float32)
+        event['hits'].E = E[mask].unsqueeze(-1).to(torch.float32)
+        event['hits'].layer = layer[mask].unsqueeze(-1).to(torch.float32)
+        event['hits'].cell = torch.stack(
+            [dx[mask],dy[mask],dz[mask]],
+            dim = -1,
+        ).to(torch.float32)
+        event['hits'].labels = labels[mask].unsqueeze(-1).to(torch.int64)
+        event['hits'].num_nodes = event['hits'].pos.size(0)
+
+        # Particle info #
+        event['particles'].pos = torch.stack(
+            [part_x,part_y],
+            dim = -1,
+        ).to(torch.float32)
+        event['particles'].E = part_E.unsqueeze(-1).to(torch.float32)
+        event['particles'].id = part_type.to(torch.float32)
+        event['particles'].num_nodes = event['particles'].E.size(0)
+
+        # Hit <-> particle link #
+        #valid = labels >= 0  # ignore noise if needed
+        event['hits', 'link', 'particles'].edge_index = torch.stack(
+            [
+                torch.arange(labels[mask].size(0)),
+                labels[mask],
+            ],
+            dim=0,
         )
 
         return event
@@ -216,13 +205,16 @@ class Simulation():
 
 
 if __name__ == "__main__":
-    parameter_dict_file_path = sys.argv[1]
-    output_path = sys.argv[2]
+    config_file_path = sys.argv[1]
+    parameter_dict_file_path = sys.argv[2]
+    output_path = sys.argv[3]
 
+    with open(config_file_path, "r") as file:
+        config = json.load(file)['simulation']
     with open(parameter_dict_file_path, "r") as file:
         parameter_dict = json.load(file)
 
-    generator = Simulation(parameter_dict)
+    generator = Simulation(config,parameter_dict)
     mf = generator.run_simulation()
     dataset = generator.stitch_events(mf)
     dataset.save(output_path)

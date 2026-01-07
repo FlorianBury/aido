@@ -7,7 +7,8 @@ import matplotlib
 import matplotlib.pyplot as plt
 from matplotlib.colors import Normalize, LogNorm
 from matplotlib.cm import ScalarMappable
-from matplotlib.colors import LinearSegmentedColormap
+from matplotlib.colors import LinearSegmentedColormap, ListedColormap
+from mpl_toolkits.axes_grid1 import make_axes_locatable
 
 def concat_dataset(datasets):
     return CaloGraphDataset.from_data_list(
@@ -28,7 +29,7 @@ class CaloGraphDataset(InMemoryDataset):
     def from_data_list_and_parameters(cls, data_list, parameters):
         parameters = parameters.unsqueeze(0).to(torch.float32)
         for data in data_list:
-            data['parameters'] = parameters.repeat_interleave(data.pos.shape[0],dim=0)
+            data.global_params = parameters
         return cls.from_data_list(data_list)
 
     @classmethod
@@ -53,10 +54,16 @@ class CaloGraphDataset(InMemoryDataset):
         return cls(ckpt["data"],ckpt["slices"])
 
     def get_shapes(self):
-        return {
-            key : value.shape[-1]
-            for key,value in self[0].items()
-        }
+        shapes = {}
+        data = self[0]
+        for node_type in data.node_types:
+            shapes[node_type] = {}
+            for key,val in data[node_type].items():
+                if torch.is_tensor(val):
+                    shapes[node_type][key] = val.shape[-1]
+        if hasattr(data,'global_params'):
+            shapes['global_params'] = data.global_params.shape[-1]
+        return shapes
 
     def get_input_mean(self,values):
         if values.dim() == 1:
@@ -71,6 +78,18 @@ class CaloGraphDataset(InMemoryDataset):
         for i in range(values.shape[1]):
             if not ((values[:,i] == 0) | (values[:,i] == 1)).all():
                 means[i] = values[:,i].mean()
+        return means
+
+    def get_means(self):
+        means = {}
+        data = self._data
+        for node_type in data.node_types:
+            means[node_type] = {}
+            for key,val in data[node_type].items():
+                if torch.is_tensor(val):
+                    means[node_type][key] = self.get_input_mean(val)
+        if hasattr(data,'global_params'):
+            means['global_params'] = self.get_input_mean(data.global_params)
         return means
 
     def get_input_std(self,values):
@@ -88,44 +107,51 @@ class CaloGraphDataset(InMemoryDataset):
                 stds[i] = values[:,i].std() + 1e-10
         return stds
 
-    def get_means(self):
-        return {
-            key : self.get_input_mean(values)
-            for key,values in self._data.items()
-        }
-
     def get_stds(self):
-        return {
-            key : self.get_input_std(values)
-            for key,values in self._data.items()
-        }
+        stds = {}
+        data = self._data
+        for node_type in data.node_types:
+            stds[node_type] = {}
+            for key,val in data[node_type].items():
+                if torch.is_tensor(val):
+                    stds[node_type][key] = self.get_input_std(val)
+        if hasattr(data,'global_params'):
+            stds['global_params'] = self.get_input_std(data.global_params)
+        return stds
 
-    def plot(self,idx):
+    def plot(self,idx,path):
         data = self[idx]
 
-        types = torch.unique(data.particle_type)
-        z_pos = torch.unique(data.pos[:,2])
-        cmap_qual = plt.cm.get_cmap('Set1', len(types))
-        label_colors = {int(typ): cmap_qual(i)[:3] for i,typ in enumerate(types)}
-
+        types = torch.arange(data['particles'].id.shape[1])
+        z_pos = torch.unique(data['hits'].pos[:,2])
+        cmap_qual = plt.get_cmap('Set1', len(types))
+        type_colors = {int(typ): cmap_qual(i)[:3] for i,typ in enumerate(types)}
+        rng = np.random.default_rng(42)
+        label_colors = rng.choice(plt.cm.tab20b.colors, size=data['particles'].num_nodes, replace=False)
         label_dict = {
-            11      : r'$e^{-}$',
-            -11     : r'$e^{+}$',
-            22      : r'$\gamma$',
-            111     : r'$\pi^{0}$',
-            211     : r'$\pi^{+}$',
-            -211    : r'$\pi^{-}$',
-            2212    : r'$p$',
-            2112    : r'$n$',
+            int(typ): f'Part #{typ}' for typ in types
         }
-        for typ in label_colors.keys():
+
+        #label_dict = {
+        #    11      : r'$e^{-}$',
+        #    -11     : r'$e^{+}$',
+        #    22      : r'$\gamma$',
+        #    111     : r'$\pi^{0}$',
+        #    211     : r'$\pi^{+}$',
+        #    -211    : r'$\pi^{-}$',
+        #    2212    : r'$p$',
+        #    2112    : r'$n$',
+        #}
+        for typ in type_colors.keys():
             assert typ in label_dict.keys(), f'Missing {typ} in label_dict'
 
         N = len(z_pos)
-        fig,axs = plt.subplots(ncols=N+1,nrows=2,figsize=(N*6,9))
+        ncols = N+1
+        nrows = 2
+        if 'predictions' in data.node_types:
+            nrows += 1
+        fig,axs = plt.subplots(ncols=ncols,nrows=nrows,figsize=(ncols*5,nrows*4))
         plt.subplots_adjust(wspace=0.4,hspace=0.4)
-        if axs.ndim == 1:
-            axs = axs.reshape(-1,1)
 
         def make_bins(center_left,center_right,width):
             n_bins = int(round((center_right - center_left)/width)) + 1
@@ -141,17 +167,22 @@ class CaloGraphDataset(InMemoryDataset):
 
         for i in range(N):
             # Select data at appropriate z layer
-            mask = data.pos[:,2] == z_pos[i]
-            pos = data.pos[mask]
-            cell = data.cell[mask][0] # assume same granularity per layer
-            labels = data.labels[mask]
-            E_dep = data.node_attr[mask,0]
+            mask = data['hits'].pos[:,2] == z_pos[i]
+            pos = data['hits'].pos[mask]
+            cell = data['hits'].cell[mask][0] # assume same granularity per layer
+            labels = data['hits'].labels[mask]
+            E_dep = data['hits'].E
+            if 'predictions' in data.node_types:
+                beta = data['predictions'].beta[mask]
+            if 'vertices' in data.node_types:
+                vert_pos = data['hits'].pos[data['vertices'].idx]
+                vert_pos = vert_pos[vert_pos[:,2] == z_pos[i]]
 
             # Get axes #
             assert cell[0] == cell[1]
             bins = make_bins(
-                float(pos[:,:2].min()),
-                float(pos[:,:2].max()),
+                float(data['hits'].pos[:,:2].min()),
+                float(data['hits'].pos[:,:2].max()),
                 float(cell[0]),
             )
 
@@ -160,21 +191,54 @@ class CaloGraphDataset(InMemoryDataset):
             for (x,y,z),l in zip(pos,labels):
                 ix = np.digitize(x,bins) - 1
                 iy = np.digitize(y,bins) - 1
-                img[ix,iy] = l
+                img[iy,ix] = l
             masked_img = np.ma.masked_equal(img, -1)
 
             # Plot per label #
-            cmap = plt.cm.Set1
+            cmap = ListedColormap(label_colors)
             cmap.set_bad(color='white')
             im = axs[0,i].imshow(
                 masked_img,
                 cmap = cmap,
-                interpolation = 'nearest',
+                origin = 'lower',
                 extent = [bins[0],bins[-1],bins[0],bins[-1]],
                 vmin = 0,
             )
-            cbar = fig.colorbar(im, ax=axs[0,i], ticks=np.arange(img.max() + 1))
-            cbar.set_label('Label')
+            #cbar = fig.colorbar(im, ax=axs[0,i], ticks=np.arange(img.max() + 1), shrink=0.7)
+            #cbar.set_label('Label')
+
+            # Add true particle locations #
+            colors = cmap(np.arange(data['particles'].num_nodes))
+            for j in range(data['particles'].num_nodes):
+                axs[0,i].scatter(
+                    data['particles'].pos[j,0],
+                    data['particles'].pos[j,1],
+                    color = colors[j],
+                    edgecolor = 'black',
+                    linewidths=1,
+                    marker = 'X',
+                    s = 100,
+                )
+            if 'vertices' in data.node_types:
+                if 'pos' in data['vertices'].keys():
+                    axs[0,i].scatter(
+                        data['vertices'].pos[:,0],
+                        data['vertices'].pos[:,1],
+                        facecolor = 'none',
+                        edgecolor = 'black',
+                        linewidths = 1,
+                        marker = 'o',
+                        s = 50,
+                    )
+                axs[0,i].scatter(
+                    vert_pos[:,0],
+                    vert_pos[:,1],
+                    facecolor = 'none',
+                    edgecolor = 'black',
+                    linewidths = 1,
+                    marker = 'D',
+                    s = 100,
+                )
 
             # Plot per type, with energy deposit #
             img_type = np.ones((len(bins)-1,len(bins)-1)) * -1
@@ -182,14 +246,16 @@ class CaloGraphDataset(InMemoryDataset):
             for (x,y,z),l,E in zip(pos,labels,E_dep):
                 ix = np.digitize(x,bins) - 1
                 iy = np.digitize(y,bins) - 1
-                img_type[ix,iy] = data.particle_type[l]
-                img_E[ix,iy] = E
+                img_type[iy,ix] = data['particles'].id[l].argmax(dim=-1)
+                img_E[iy,ix] = E
 
             # Make rgba array, following energy and type #
             rgba = np.ones((*img_type.shape, 4))
             for typ in types:
                 mask = img_type == typ
-                rgba[mask, :3] = label_colors[int(typ)][:3]
+                if mask.sum() == 0:
+                    continue
+                rgba[mask, :3] = type_colors[int(typ)][:3]
                 typ_values = img_E[mask]
                 if typ_values.max() > 0:
                     rgba[mask, 3] = (np.log10(typ_values+1e-10) - np.log10(typ_values.min()+1e-10)) / (np.log10(typ_values.max()+1e-10) - np.log10(typ_values.min()+1e-10))
@@ -202,29 +268,124 @@ class CaloGraphDataset(InMemoryDataset):
             im = axs[1,i].imshow(
                 rgba,
                 interpolation = 'nearest',
+                origin = 'lower',
                 extent = [bins[0],bins[-1],bins[0],bins[-1]],
             )
+            for typ in types:
+                if 'pos' in data['vertices'].keys():
+                    axs[1,i].scatter(
+                        data['particles'].pos[data['particles'].id.argmax(dim=-1)==typ,0],
+                        data['particles'].pos[data['particles'].id.argmax(dim=-1)==typ,1],
+                        color = type_colors[int(typ)][:3],
+                        edgecolor = 'black',
+                        linewidths=1,
+                        marker = 'X',
+                        s = 100,
+                    )
+            if 'vertices' in data.node_types:
+                if 'pos' in data['vertices'].keys() and 'id' in data['vertices'].keys():
+                    for typ in types:
+                        axs[1,i].scatter(
+                            data['vertices'].pos[data['vertices'].id.argmax(dim=-1)==typ,0],
+                            data['vertices'].pos[data['vertices'].id.argmax(dim=-1)==typ,1],
+                            facecolor = 'none',
+                            edgecolor = type_colors[int(typ)][:3],
+                            linewidths = 3,
+                            marker = 'o',
+                            s = 50,
+                        )
+                axs[1,i].scatter(
+                    vert_pos[:,0],
+                    vert_pos[:,1],
+                    facecolor = 'none',
+                    edgecolor = 'black',
+                    linewidths = 1,
+                    marker = 'D',
+                    s = 100,
+                )
+
+            # Add beta plot #
+            if 'predictions' in data.node_types:
+                img_beta = np.ones((len(bins)-1,len(bins)-1)) * -1
+                for (x,y,z),b in zip(pos,beta):
+                    ix = np.digitize(x,bins) - 1
+                    iy = np.digitize(y,bins) - 1
+                    img_beta[iy,ix] = b
+                im = axs[2,i].imshow(
+                    img_beta,
+                    interpolation = 'nearest',
+                    origin = 'lower',
+                    cmap = 'Blues',
+                    extent = [bins[0],bins[-1],bins[0],bins[-1]],
+                    vmin = 0.,
+                    vmax = 1.,
+                )
+                if 'vertices' in data.node_types:
+                    axs[2,i].scatter(
+                        vert_pos[:,0],
+                        vert_pos[:,1],
+                        facecolor = 'none',
+                        edgecolor = 'black',
+                        linewidths = 1,
+                        marker = 'D',
+                        s = 100,
+                    )
+
+
+
 
             # Axis labels #
-            axs[0,i].set_xlabel('x [mm]')
-            axs[1,i].set_xlabel('x [mm]')
-            axs[0,i].set_ylabel('y [mm]')
-            axs[1,i].set_ylabel('y [mm]')
-            axs[0,i].set_title(f'Layer {i} (z = {z_pos[i]:.3f} mm)')
-            axs[1,i].set_title(f'Layer {i} (z = {z_pos[i]:.3f} mm)')
+            axs[0,i].set_xlabel('x [cm]')
+            axs[1,i].set_xlabel('x [cm]')
+            axs[0,i].set_ylabel('y [cm]')
+            axs[1,i].set_ylabel('y [cm]')
+            axs[0,i].set_title(f'Layer {i} (z = {z_pos[i]:.3f} cm)')
+            axs[1,i].set_title(f'Layer {i} (z = {z_pos[i]:.3f} cm)')
 
-        # Now add colorbar to the last axis #
+
+        # Add markers #
         axs[0,-1].cla()
         axs[0,-1].set_axis_off()
+        axs[0,-1].scatter(
+            [],[],
+            color = 'white',
+            edgecolor = 'black',
+            linewidths=1,
+            marker = 'X',
+            s = 100,
+            label = 'True particle',
+        )
+        if 'vertices' in data.node_types:
+            axs[0,-1].scatter(
+                [],[],
+                facecolor = 'white',
+                edgecolor = 'black',
+                linewidths = 1,
+                marker = 'o',
+                s = 50,
+                label = 'Reco particle',
+            )
+            axs[0,-1].scatter(
+                [],[],
+                facecolor = 'white',
+                edgecolor = 'black',
+                linewidths = 1,
+                marker = 'D',
+                s = 100,
+                label = 'Condensation point',
+            )
+        axs[0,-1].legend(loc='center left',fontsize=16)
+
+        # Now add colorbar to the last axis #
         axs[1,-1].cla()
         axs[1,-1].set_axis_off()
         width_fraction = 0.25 / len(types)
         x0 = 0
+        max_val = data['hits'].E.max()
+        min_val = data['hits'].E[data['hits'].E>0].min()
         for i, typ in enumerate(types):
-            max_val = data.node_attr[:,0].max()
-            min_val = data.node_attr[data.node_attr[:,0]>0,0].min()
             norm = LogNorm(vmin=min_val, vmax=max_val)
-            cmap = make_label_cmap(label_colors[int(typ)])
+            cmap = make_label_cmap(type_colors[int(typ)])
             sm = ScalarMappable(cmap=cmap, norm=norm)
             sm.set_array([])
             inset_ax = axs[1,-1].inset_axes([x0, 0, width_fraction, 1.0])
@@ -232,9 +393,50 @@ class CaloGraphDataset(InMemoryDataset):
             cbar.set_label(f'{label_dict[int(typ)]} energy [GeV]')
             x0 += width_fraction * 4
 
-        fig.savefig('test.png',bbox_inches='tight')
+        # Add beta colorbar #
+        axs[2,-1].cla()
+        axs[2,-1].set_axis_off()
+        if 'predictions' in data.node_types:
+            cmap = plt.cm.Blues
+            norm = matplotlib.colors.Normalize(vmin=0,vmax=1)
+            sm = ScalarMappable(norm=norm, cmap=cmap)
+            sm.set_array([])
+            divider = make_axes_locatable(axs[2,-1])
+            cax = divider.append_axes("left", size="10%", pad=0.1)
+            cb = fig.colorbar(sm, cax=cax)
+            cb.set_label(r"$\beta$ (condensation)")
+
+        fig.savefig(path,bbox_inches='tight')
 
 if __name__ == '__main__':
-    dataset = torch.load(sys.argv[1],weights_only=False)
-    dataset.plot(int(sys.argv[2]))
-    from IPython import embed; embed()
+    import argparse
+
+    parser = argparse.ArgumentParser(description="Event plotting")
+
+    parser.add_argument(
+        "--dataset",
+        type = str,
+        help = "Path to dataset",
+        required = True,
+    )
+    parser.add_argument(
+        "--event",
+        type = int,
+        help = "Event number (integer)",
+        required = True,
+    )
+
+    parser.add_argument(
+        "--output",
+        type = str,
+        help = "Output plot path",
+        required = True,
+    )
+
+    args = parser.parse_args()
+
+    dataset = CaloGraphDataset.load(args.dataset)
+    dataset.plot(
+        idx = args.event,
+        path = args.output,
+    )

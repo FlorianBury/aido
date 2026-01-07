@@ -14,10 +14,13 @@ import pandas as pd
 import torch
 from torch.utils.data import random_split
 
-from .dataset import CaloGraphDataset
-from .utils import LossPlotting, EarlyStopping
-from .config import CaloConfig
-from .model import GravNetModel
+sys.path.append(os.path.abspath(pathlib.Path(__file__).parent.parent))
+
+from dataset import CaloGraphDataset, concat_dataset
+from utils import LossPlotting, EarlyStopping
+from config import CaloConfig
+from model import GravNetModel
+from validation import validation_plot
 
 #def pre_train(
 #    model: Reconstruction,
@@ -51,6 +54,7 @@ from .model import GravNetModel
 #
 #    model.to('cpu')
 
+
 def train(
     config_path: Union[str, os.PathLike],
     input_graph_path: Union[str, os.PathLike],
@@ -70,6 +74,8 @@ def train(
     print (f'Train dataset : {len(train_dataset)} / Validation dataset : {len(valid_dataset)}')
     model_previous_path = os.path.join(results_dir, "models", f"graph_{iteration-1}.pt")
 
+    loss_plotter = LossPlotting()
+
     if os.path.exists(model_previous_path) and not config.graph.retrain:
         print ('Loading graph model')
         model = torch.load(model_previous_path,weights_only=False)
@@ -77,38 +83,87 @@ def train(
         print ('Creating graph model')
         model = GravNetModel(
             inputs = config.graph.inputs,
-            reg_outputs = config.graph.reg_outputs,
-            cls_outputs = config.graph.cls_outputs,
+            regression = config.graph.regression,
+            classification = config.graph.classification,
             loss_factors = config.graph.loss_factors,
             shapes = simulation_dataset.get_shapes(),
             means = simulation_dataset.get_means(),
             stds = simulation_dataset.get_stds(),
         )
         print (model)
-
         print ('Train reco model')
         model.to("cuda" if torch.cuda.is_available() else "cpu")
         model.train_model(
             train_dataset,
             valid_dataset,
             batch_size = 64,
-            n_epochs = 20,
-            lr = 1e-4,
-            #plotter = reco_loss_plotter,
+            n_epochs = 100,
+            lr = 1e-3,
+            plotter = loss_plotter,
             #early_stopping = reco_early_stopping,
         )
+        #model.train_model(
+        #    train_dataset,
+        #    valid_dataset,
+        #    batch_size = 64,
+        #    n_epochs = 5,
+        #    lr = 1e-4,
+        #    plotter = loss_plotter,
+        #    #early_stopping = reco_early_stopping,
+        #)
+
         torch.save(model,model_previous_path)
+
+        loss_plotter.plot(
+            os.path.join(
+                results_dir,
+                "plots",
+                "validation",
+                "reco_model",
+                "losses",
+                f"loss_{iteration}.png",
+            )
+        )
 
     train_dataset = model.inference(
         dataset = train_dataset,
+        batch_size = 200,
         t_beta = config.graph.t_beta,
         t_dist = config.graph.t_dist,
+    )
+    validation_plot(
+        train_dataset,
+        os.path.join(
+            results_dir,
+            "plots",
+            "validation",
+            "reco_model",
+            "on_trainingData",
+            f"validation_{iteration}.png",
+        )
     )
     valid_dataset = model.inference(
         dataset = valid_dataset,
+        batch_size = 200,
         t_beta = config.graph.t_beta,
         t_dist = config.graph.t_dist,
     )
+    validation_plot(
+        valid_dataset,
+        os.path.join(
+            results_dir,
+            "plots",
+            "validation",
+            "reco_model",
+            "on_validationData",
+            f"validation_{iteration}.png",
+        )
+    )
+
+    output_dataset = concat_dataset([train_dataset,valid_dataset])
+    output_dataset.save(output_graph_path)
+
+    print (f'Saved output dataset to {output_graph_path}')
 
 #        for lr in config.reconstruction.lr_main:
 #            reco_model.train_model(

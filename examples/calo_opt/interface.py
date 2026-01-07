@@ -1,17 +1,16 @@
 import os
+import sys
 import re
 import json
 from typing import Dict, Iterable, List
 
 import pandas as pd
 import torch
-#from calo_opt.reconstruction.model import Reconstruction
-#from calo_opt.classification.model import Classification
 
 import aido
 from .config import CaloConfig
 from .dataset import CaloGraphDataset, concat_dataset
-from .train import train
+#from .train import train
 
 class CaloOptInterface(aido.UserInterfaceBase):
     """ This class is an example of how to implement the 'AIDOUserInterface' class.
@@ -51,7 +50,7 @@ class CaloOptInterface(aido.UserInterfaceBase):
     def simulate(self, parameter_dict_path: str, sim_output_path: str):
         os.system(
             f"singularity exec {self.container_extra_flags} {self.container_path} python3 \
-            examples/calo_opt/simulation.py {parameter_dict_path} {sim_output_path} {self.suppress_output}"
+            examples/calo_opt/simulation.py {os.path.join(self._results_dir,'calo.json')} {parameter_dict_path} {sim_output_path} {self.suppress_output}"
         )
         return None
 
@@ -84,13 +83,14 @@ class CaloOptInterface(aido.UserInterfaceBase):
     def reconstruct(self, reco_input_path: str, reco_output_path: str, is_validation: bool):
         """ Start your reconstruction algorithm from a local container.
         """
-        train(
-            config_path = f" {self.results_dir}/calo.json",
-            input_graph_path = reco_input_path,
-            output_graph_path = reco_output_path,
-            isVal = is_validation,
-            results_dir = self.results_dir,
-        )
+        os.system(f'{sys.executable} examples/calo_opt/train.py {f" {self.results_dir}/calo.json"} {reco_input_path} {reco_output_path} {is_validation} {self.results_dir}')
+        #train(
+        #    config_path = f" {self.results_dir}/calo.json",
+        #    input_graph_path = reco_input_path,
+        #    output_graph_path = reco_output_path,
+        #    isVal = is_validation,
+        #    results_dir = self.results_dir,
+        #)
         return None
 
 #    def reconstruction_loss(self, y: torch.Tensor, y_pred: torch.Tensor) -> torch.Tensor:

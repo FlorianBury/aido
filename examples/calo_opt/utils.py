@@ -6,38 +6,48 @@ import matplotlib.pyplot as plt
 
 class LossPlotting:
     def __init__(self):
-        self.log = {}
+        self.train_log = {}
+        self.valid_log = {}
+        self.lr = []
 
-    def add_value(self,key,value):
-        if key not in self.log.keys():
-            self.log[key] = [value]
+    def add_lr_value(self,key,value):
+        self.lr.append(value)
+
+    def add_train_value(self,key,value):
+        if key not in self.train_log.keys():
+            self.train_log[key] = [value]
         else:
-            self.log[key].append(value)
+            self.train_log[key].append(value)
+
+    def add_valid_value(self,key,value):
+        if key not in self.valid_log.keys():
+            self.valid_log[key] = [value]
+        else:
+            self.valid_log[key].append(value)
 
     def plot(self,path):
         fig,ax1 = plt.subplots(figsize=(6,5))
         ax2 = ax1.twinx()
-        colors = plt.cm.Set1(np.linspace(0, 1, len(self.log)))
-        for i,(key, values) in enumerate(self.log.items()):
-            if key == 'lr':
-                ax2.plot(
-                    np.arange(len(values)),
-                    values,
-                )
+        colors = plt.cm.Set1(np.linspace(0, 1, len(self.train_log)))
+        for i,key in enumerate(self.train_log.keys()):
+            ax1.plot(
+                np.arange(len(self.train_log[key])),
+                self.train_log[key],
+                color = colors[i],
+                linestyle = 'solid',
+                label = key,
+            )
+            if key in self.valid_log.keys():
                 ax1.plot(
-                    [],[],
+                    np.arange(len(self.valid_log[key])),
+                    self.valid_log[key],
                     color = colors[i],
-                    linestyle = 'solid',
-                    label = 'Learning rate',
+                    linestyle = 'dashed',
                 )
-            else:
-                ax1.plot(
-                    np.arange(len(values)),
-                    values,
-                    color = colors[i],
-                    linestyle = 'solid',
-                    label = key,
-                )
+        ax2.plot(
+            np.arange(len(self.lr)),
+            self.lr,
+        )
         ax1.legend()
         ax1.set_xlabel('Epoch')
         ax1.set_ylabel('Loss')

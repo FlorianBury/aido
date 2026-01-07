@@ -1,3 +1,6 @@
+import os
+import sys
+import pathlib
 from copy import deepcopy
 import numpy as np
 from tqdm.auto import tqdm
@@ -5,9 +8,11 @@ import torch
 from torch import nn
 from torch_geometric.loader import DataLoader
 
-from .dataset import CaloGraphDataset
 from fastgraphcompute.gnn_ops import GravNetOp
 from fastgraphcompute.object_condensation import ObjectCondensation
+
+sys.path.append(os.path.abspath(pathlib.Path(__file__).parent.parent))
+from dataset import CaloGraphDataset
 
 class GravBlock(nn.Module):
     def __init__(
@@ -41,23 +46,40 @@ class GravBlock(nn.Module):
         x, _,_,_ = self.grav_layer(x,row_splits)
         return x
 
-#           import torch
-#   from fastgraphcompute.gnn_ops import GravNetOp
-#
-#   model = GravNetOp(in_channels=8, out_channels=16, space_dimensions=4, propagate_dimensions=8, k=20)
-#   input_tensor = torch.rand(32, 8)
-#   # row split format, cutting the 32 x 8 array into individual samples / events
-#   # one with 18 entries, one with 14 entries.
-#   row_splits = torch.tensor([0, 18, 32], dtype=torch.int32)
-#   output, neighbor_idx, distsq, S_space = model(input_tensor, row_splits)
-#   print(output.shape)  # Expected output: (32, 16)
+class BufferValue(nn.Module):
+    def __init__(self,values):
+        super().__init__()
+        if torch.is_tensor(values):
+            self.values = nn.Parameter(values, requires_grad=False)
+        elif isinstance(values,(int,float)):
+            self.values = nn.Parameter(torch.tensor([values]), requires_grad=False)
+        else:
+            raise TypeError(f'Type {type(values)} not implemented')
+
+
+class BufferModule(nn.Module):
+    def __init__(self,dict_values):
+        super().__init__()
+
+        self.data = nn.ModuleDict()
+        for key,values in dict_values.items():
+            if isinstance(values,dict):
+                self.data[key] = BufferModule(values)
+            else:
+                self.data[key] = BufferValue(values)
+
+    def __getitem__(self,key):
+        return self.data[key]
+
+    def keys(self):
+        return self.data.keys()
 
 class GravNetModel(nn.Module):
     def __init__(
         self,
         inputs,
-        reg_outputs,
-        cls_outputs,
+        regression,
+        classification,
         loss_factors,
         shapes,
         means,
@@ -66,25 +88,27 @@ class GravNetModel(nn.Module):
     ):
         super().__init__()
 
-        self.shapes = shapes
-        self.save_dict("loss_factors",loss_factors)
-        self.save_dict("means",means)
-        self.save_dict("stds",stds)
+        self.shapes = BufferModule(shapes)
+        self.loss_factors = BufferModule(loss_factors)
+        self.means = BufferModule(means)
+        self.stds = BufferModule(stds)
 
         self.dim_embed = 64
         self.dim_out = 32
         self.dim_space = 4
         self.dim_propagate = 16
-        self.dim_in = 16 * len(inputs)
-        self.n_blocks = 4
-        self.k = 16
+        self.n_blocks = 6
+        self.k = 128
 
         self.init_layers = nn.ModuleDict(
             {
-                f'__{inp}__': nn.Linear(self.shapes[inp],16)
-                for inp in inputs
+                name: nn.Linear(self.shapes['hits'][name].values[0],16)
+                for name in inputs
             }
         )
+        if 'global_params' in self.shapes.keys():
+            self.init_layers['global_params'] = nn.Linear(self.shapes['global_params'].values[0],16)
+        self.dim_in = 16 * len(self.init_layers)
 
         self.blocks = nn.ModuleList(
             [
@@ -101,22 +125,31 @@ class GravNetModel(nn.Module):
         )
 
         self.mlp = nn.Sequential(
-            nn.Linear(self.n_blocks * self.dim_out, 128),
+            nn.Linear(self.n_blocks * self.dim_out, 256),
             nn.ReLU(),
-            nn.Linear(self.n_blocks * self.dim_out, 128),
+            nn.Linear(256, 256),
+            nn.ReLU(),
+            nn.Linear(256, 256),
             nn.ReLU(),
         )
 
         self.heads = nn.ModuleDict(
             {
-                'beta' : nn.Sequential
-                (
-                    nn.Linear(128,1),
+                'beta' : nn.Sequential(
+                    nn.Linear(256,128),
+                    nn.ReLU(),
+                    nn.Linear(128,64),
+                    nn.ReLU(),
+                    nn.Linear(64,1),
                     nn.Sigmoid(),
                 ),
-                'embedding' : nn.Sequential
-                (
-                    nn.Linear(128,3),
+                'embedding' : nn.Sequential(
+                    nn.Linear(256,128),
+                    nn.ReLU(),
+                    nn.Linear(128,64),
+                    nn.ReLU(),
+                    nn.Linear(64,1),
+                    nn.Sigmoid(),
                 ),
             }
         )
@@ -125,29 +158,50 @@ class GravNetModel(nn.Module):
                 'beta' : ObjectCondensation(q_min=0.1, s_B=1.0),
             }
         )
-        for out in reg_outputs:
-            self.heads[out] = nn.Linear(128,self.shapes[out])
-            self.loss_functions[out] = nn.MSELoss(reduction='none')
-        for out in cls_outputs:
-            self.heads[out] = nn.Linear(128,self.shapes[out])
-            self.loss_functions[out] = nn.CrossEntropyLoss(reduction='none') if self.shapes[out] > 1 else nn.BCELoss(reduction='mean')
+        for name in regression:
+            self.heads[name] = nn.Sequential(
+                    nn.Linear(256,128),
+                    nn.ReLU(),
+                    nn.Linear(128,64),
+                    nn.ReLU(),
+                    nn.Linear(64,self.shapes['particles'][name].values[0]),
+                )
+            nn.Linear(256,self.shapes['particles'][name].values[0])
+            self.loss_functions[name] = nn.MSELoss(reduction='none')
+        for name in classification:
+            self.heads[name] = nn.Sequential(
+                    nn.Linear(256,128),
+                    nn.ReLU(),
+                    nn.Linear(128,64),
+                    nn.ReLU(),
+                    nn.Linear(64,self.shapes['particles'][name].values[0]),
+                )
+            self.loss_functions[name] = nn.CrossEntropyLoss(reduction='none') if self.shapes['particles'][name].values[0] > 1 else nn.BCELoss(reduction='mean')
 
         self.optimizer = torch.optim.Adam(self.parameters(), lr=0.0001)
         self.device = torch.device(device)
 
     def forward(self, batch):
         # Init and concat #
-        x = torch.cat(
-            [
-                self.init_layers[key](batch[key.replace('__','')])
-                for key in self.init_layers.keys()
-            ],
-            dim = -1,
-        )
+        xs = [
+            self.init_layers[key](batch['hits'][key])
+            for key in self.init_layers.keys() if key != 'global_params'
+        ]
+        x = torch.cat(xs,dim=-1)
+        if 'global_params' in batch.keys():
+            x = torch.cat(
+                [
+                    x,
+                    self.init_layers['global_params'](
+                        batch['global_params'][batch['hits']['batch']],
+                    )
+                ],
+                dim = -1
+            )
         # Apply blocks and keep track of outputs #
         ys = []
         for block in self.blocks:
-            x = block(x,row_splits=batch['ptr'])
+            x = block(x,row_splits=batch['hits']['ptr'])
             ys.append(x)
         # Concat and pass through last layer and heads#
         y = torch.cat(ys,dim=-1)
@@ -157,16 +211,6 @@ class GravNetModel(nn.Module):
             for key,head in self.heads.items()
         }
 
-    def save_dict(self,name,values_dict):
-        setattr(self,name,nn.ModuleDict())
-        buffer = getattr(self,name)
-        for key,val in values_dict.items():
-            if not torch.is_tensor(val):
-                val = torch.tensor(val,dtype=torch.float)
-            mod = nn.Module()
-            mod.register_buffer("value", val)
-            buffer[f'__{key}__'] = mod
-
     def loss(self,batch,outputs):
         # Get condensation loss #
         beta = outputs['beta']
@@ -175,8 +219,8 @@ class GravNetModel(nn.Module):
         L_att, L_rep, L_beta, _, _ = self.loss_functions['beta'](
             beta = beta,
             coords = embedding,
-            asso_idx = batch['labels'].to(torch.int64),
-            row_splits = batch['ptr'],
+            asso_idx = batch['hits']['labels'].to(torch.int64),
+            row_splits = batch['hits']['ptr'],
         )
 
         losses = {
@@ -185,19 +229,41 @@ class GravNetModel(nn.Module):
             'beta' : L_beta,
         }
 
+        edge_index = batch[('hits','link','particles')].edge_index
         for key in self.loss_functions.keys():
             if key == 'beta':
                 continue
-            loss = self.loss_functions[key](
-                outputs[key],
-                batch[key][batch['batch']],
-            )
+            pred = outputs[key]
+            true = batch['particles'][key][edge_index[1]]
+            loss = self.loss_functions[key](pred,true)
             if loss.dim() > 1:
                 loss = loss.mean(dim=-1)
             losses[key] = (beta.ravel() * loss).mean()
+            #losses[key] = (beta.ravel() * loss).sum() / (beta.sum() + 1e-6)
 
         return losses
 
+    def apply_preprocessing(self,batch):
+        for node in batch.node_types:
+            for key,values in batch[node].items():
+                if key in self.means[node].keys() and key in self.stds[node].keys():
+                    batch[node][key] = (values - self.means[node][key].values) / self.stds[node][key].values
+        if 'global_params' in batch.keys() and 'global_params' in self.means.keys() and 'global_params' in self.stds.keys():
+            batch['global_params'] = (batch['global_params'] - self.means['global_params'].values) / self.stds['global_params'].values
+        return batch
+
+    @staticmethod
+    def print_batch_size(batch):
+        total_bytes = 0
+        for key, value in batch.items():
+            if isinstance(value, torch.Tensor):
+                total_bytes += value.numel() * value.element_size()
+            # handle nested HeteroDataBatch
+            elif hasattr(value, "__dict__"):
+                total_bytes += sum(v.numel() * v.element_size()
+                                   for v in value.__dict__.values()
+                                   if isinstance(v, torch.Tensor))
+        print(f"Batch size: {total_bytes / (1024**2):.2f} MB")
 
     def train_model(
         self,
@@ -206,6 +272,7 @@ class GravNetModel(nn.Module):
         batch_size: int,
         n_epochs: int,
         lr: float,
+        plotter = None,
     ):
         print(f"Reconstruction Training: {lr=}, {batch_size=}")
         train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
@@ -216,6 +283,14 @@ class GravNetModel(nn.Module):
 
         self.to(self.device)
         self.train()
+
+
+        torch.cuda.reset_peak_memory_stats()
+        batch = next(iter(train_loader))
+        batch = batch.to("cuda")
+        with torch.amp.autocast('cuda'):
+            out = self(batch)
+        print("Peak memory during forward:", torch.cuda.max_memory_allocated() / 1e9, "GB")
 
         for epoch in range(n_epochs):
             # Training #
@@ -229,13 +304,9 @@ class GravNetModel(nn.Module):
             }
             for batch_idx, batch in tqdm(enumerate(train_loader),total=len(train_loader),desc='Training batches',leave=False):
                 # Move to device #
-                batch = {key:val.to(self.device) for key,val in batch.items()}
+                batch = batch.to(self.device)
                 # Preprocessing #
-                batch = {
-                    key : (val - self.means[f'__{key}__'].value) / self.stds[f'__{key}__'].value
-                        if f'__{key}__' in self.means.keys() else val
-                    for key,val in batch.items()
-                }
+                batch = self.apply_preprocessing(batch)
                 # Process #
                 outputs = self(batch)
                 # Losses #
@@ -244,7 +315,7 @@ class GravNetModel(nn.Module):
                 loss_values = []
                 for key,loss in losses.items():
                     if key in self.loss_factors.keys():
-                        factor = self.loss_factors[f'__{key}__'].value
+                        factor = self.loss_factors[key].values
                     else:
                         factor = 1.
                     loss_values.append(factor * loss)
@@ -256,39 +327,60 @@ class GravNetModel(nn.Module):
                 for key,val in losses.items():
                     train_losses[key][batch_idx] = val.item()
                 train_losses['total'][batch_idx] = loss_tot.item()
-
-            s = f"Reco epoch = {epoch:4d} - Loss = {train_losses['total'].mean():7.5f} : "
-            for key,loss in train_losses.items():
+            # Validation #
+            self.eval()
+            valid_losses = {
+                'total' : torch.zeros(len(valid_loader)),
+                'attraction' : torch.zeros(len(valid_loader)),
+                'repulsion' : torch.zeros(len(valid_loader)),
+                'beta' : torch.zeros(len(valid_loader)),
+                **{key: torch.zeros(len(valid_loader)) for key in self.loss_functions.keys() if key != 'beta'}
+            }
+            for batch_idx, batch in tqdm(enumerate(valid_loader),total=len(valid_loader),desc='Validation batches',leave=False):
+                # Move to device #
+                batch = batch.to(self.device)
+                # Preprocessing #
+                batch = self.apply_preprocessing(batch)
+                # Process #
+                with torch.no_grad():
+                    outputs = self(batch)
+                # Losses #
+                losses = self.loss(batch,outputs)
+                # Total loss #
+                loss_values = []
+                for key,loss in losses.items():
+                    if key in self.loss_factors.keys():
+                        factor = self.loss_factors[key].values
+                    else:
+                        factor = 1.
+                    loss_values.append(factor * loss)
+                loss_tot = sum(loss_values)
+                # Record #
+                for key,val in losses.items():
+                    valid_losses[key][batch_idx] = val.item()
+                valid_losses['total'][batch_idx] = loss_tot.item()
+            # Print losses #
+            s = f"Reco epoch = {epoch:3d} - Loss = {train_losses['total'].mean():7.5f} [{valid_losses['total'].mean():7.5f}] : "
+            for key in train_losses.keys():
                 if key == 'total':
                     continue
-                if f'__{key}__' in self.loss_factors.keys():
-                    factor = self.loss_factors[f'__{key}__'].value
+                if key in self.loss_factors.keys():
+                    factor = self.loss_factors[key].values.item()
                 else:
                     factor = 1.
-                s += f"{key} = {factor:.1f} x {loss.mean():7.5f} [] + "
+                s += f"{key} = {factor:.2f} x {train_losses[key].mean():7.5f} [{valid_losses[key].mean():7.5f}] + "
             print (s)
-#            # Validation #
-#            self.eval()
-#            valid_losses = torch.zeros(len(valid_loader))
-#            for batch_idx, (detector_parameters, x, c, y) in enumerate(valid_loader):
-#                detector_parameters: torch.Tensor = detector_parameters.to(self.device)
-#                x: torch.Tensor = x.to(self.device)
-#                c: torch.Tensor = c.to(self.device)
-#                y: torch.Tensor = y.to(self.device)
-#                y_pred: torch.Tensor = self(detector_parameters, x, c)
-#                loss_per_event = self.loss(
-#                    train_dataset.unnormalize_target(y),
-#                    train_dataset.unnormalize_target(y_pred)
-#                )
-#                loss = loss_per_event.clone().mean()
-#                valid_losses[batch_idx] = loss.item()
-#
-#            print(f"Reco Epoch: {epoch:4d} - Loss: {train_losses.mean():8.3f} - Val loss {valid_losses.mean():8.3f}")
-#
+
+            if plotter is not None:
+                for key in train_losses.keys():
+                    plotter.add_train_value(f'{key}',train_losses[key].mean())
+                    plotter.add_valid_value(f'{key}',valid_losses[key].mean())
+                plotter.add_lr_value('lr',lr)
 
     def inference(
         self,
         dataset,
+        batch_size = 64,
         t_beta = 0.1,
         t_dist = 0.8,
     ):
@@ -296,40 +388,38 @@ class GravNetModel(nn.Module):
         whole dataset at once. The model is applied to the dataset in batches and the results are concatenated
         (the batch size is a hyperparameter).
         """
-        data_loader = DataLoader(dataset, batch_size=batch_size, shuffle=False)
-        num_nodes = [[dataset[i].num_nodes for i in range(len(dataset))]]
-        results = {
-            'beta' : torch.zeros((len(dataset),1)),
-            'embedding' : torch.zeros((len(dataset),3)),
-            **{
-                key : torch.zeros((len(dataset),self.shapes[key]))
-                for key in self.heads.keys() if key not in ['beta','embedding']
-            }
-        }
+        print (f'Condensation inference with t_beta = {t_beta} and t_dist = {t_dist}')
 
         self.to(self.device)
         self.eval()
 
+        # Perform inferences #
+        loader = DataLoader(dataset,batch_size=batch_size,shuffle=False)
         data_list = []
-        for data in tqdm(dataset,desc='Events',leave=False):
-            # Make single entry batch #
-            batch = deepcopy(data)
-            batch['batch'] = torch.zeros(data.num_nodes, dtype=torch.long)
-            batch['ptr'] = torch.tensor([0, data.num_nodes], dtype=torch.long)
+        for batch_idx, batch in tqdm(enumerate(loader),total=len(loader),desc='Batches',leave=False):
             # Move to device #
-            batch = {key:val.to(self.device) for key,val in batch.items()}
+            proc_batch = deepcopy(batch).to(self.device)
             # Preprocessing #
-            batch = {
-                key : (val - self.means[f'__{key}__'].value) / self.stds[f'__{key}__'].value
-                    if f'__{key}__' in self.means.keys() else val
-                for key,val in batch.items()
-            }
+            proc_batch = self.apply_preprocessing(proc_batch)
             # Process #
-            outputs = self(batch)
-            beta = outputs['beta'].cpu()
-            embedding = outputs['embedding'].cpu()
-            data['beta'] = beta
-            # Inference #
+            with torch.no_grad():
+                outputs = self(proc_batch)
+            # Add output to batch (hack with slice_dict) #
+            batch._slice_dict['predictions'] = {}
+            batch._inc_dict['predictions'] = {}
+            for key,val in outputs.items():
+                setattr(batch['predictions'],key,val)
+                batch._slice_dict['predictions'][key] = batch['hits'].ptr
+                batch._inc_dict['predictions'][key] = torch.zeros(len(batch))
+            batch['predictions'].num_nodes = batch['hits'].num_nodes
+            batch['predictions'].batch = batch['hits'].batch
+            batch['predictions'].ptr = batch['hits'].ptr
+            # Batch->data_list #
+            data_list.extend(batch.to_data_list())
+
+        for data in tqdm(data_list,desc='Events',leave=False):
+            beta = data['predictions']['beta']
+            embedding = data['predictions']['embedding']
             beta_order = beta.argsort(descending=True,dim=0)
             vertex_indices = []
             for idx in beta_order:
@@ -348,51 +438,17 @@ class GravNetModel(nn.Module):
                     dist = torch.norm(prev_x - vertex_x, dim=1)
                     if dist.min() > t_dist:
                         vertex_indices.append(idx)
-            vertex_indices = torch.tensor(vertex_indices)
-            data['vertex_idx'] = vertex_indices
+            vertex_indices = torch.tensor(vertex_indices).to(torch.int)
+            data['vertices'].idx = vertex_indices
             # Obtain particle prediction for the condensation vertices #
             for key,out in outputs.items():
-                if 'particle' in key:
-                    out = out * self.stds[f'__{key}__'].value + self.means[f'__{key}__'].value
-                    data[key.replace('particle','vertex')] = out[vertex_indices]
+                if key in ['beta','embedding']:
+                    continue
+                out = out * self.stds['particles'][key].values + self.means['particles'][key].values
+                setattr(data['vertices'],key,out[vertex_indices])
 
-            # Save data #
-            data_list.append(data)
+        #from IPython import embed; embed()
 
         return CaloGraphDataset.from_data_list(data_list)
-
-
-
-#        # Obtain predictions #
-#        for batch_idx, batch in tqdm(enumerate(data_loader),total=len(data_loader),desc='Inference batches',leave=False):
-#            # Move to device #
-#            batch = {key:val.to(self.device) for key,val in batch.items()}
-#            # Preprocessing #
-#            batch = {
-#                key : (val - self.means[f'__{key}__'].value) / self.stds[f'__{key}__'].value
-#                    if f'__{key}__' in self.means.keys() else val
-#                for key,val in batch.items()
-#            }
-#            # Process #
-#            outputs = self(batch)
-#            from IPython import embed; embed()
-#            for key in outputs.keys():
-#                results[key][batch_idx * batch_size: (batch_idx + 1) * batch_size] = outputs[key]
-#
-#        # Perform object condensation #
-#        data_list = [dataset[i] for i in range(len(dataset))]
-#
-#        beta = results['beta']
-#        embedding = results['embedding']
-#
-#        beta_order = beta.argsort(descending=True)
-#        vertex_indices = []
-#        for idx in beta_order:
-#            if beta[idx] < t_beta:
-#                break
-#            from IPython import embed; embed()
-
-
-
 
 
