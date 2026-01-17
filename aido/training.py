@@ -1,16 +1,20 @@
 import json
 import os
+import random
 from typing import Callable
 
 import numpy as np
 import pandas as pd
 import torch
+from torch.utils.data import Subset
 
 from aido.config import AIDOConfig
 from aido.logger import logger
 from aido.optimizer import Optimizer
 from aido.simulation_helpers import SimulationParameterDictionary
-from aido.surrogate import Surrogate, SurrogateDataset
+from aido.surrogate import Surrogate, SurrogateDataset, validation_plot
+from aido.losses import HungarianMatching
+from aido.utils import LossPlotting
 
 
 #def pre_train(model: Surrogate, dataset: SurrogateDataset, n_epochs: int):
@@ -42,7 +46,7 @@ from aido.surrogate import Surrogate, SurrogateDataset
 
 def training_loop(
         reco_file_paths_dict: dict | str | os.PathLike,
-        reconstruction_loss_function: Callable[[torch.Tensor, torch.Tensor], torch.Tensor],
+        iteration: int,
         constraints: None | Callable[[SimulationParameterDictionary], float | torch.Tensor] = None,
         ):
     """Internal training of the Surrogate and Optimizer models
@@ -89,55 +93,192 @@ def training_loop(
 
     # Surrogate
     parameter_dict = SimulationParameterDictionary.from_json(parameter_dict_input_path)
-    surrogate_df = pd.read_parquet(output_df_path)
+    surrogate_dataset = SurrogateDataset.load_sparse(config,output_df_path)
+
+    indices = list(range(len(surrogate_dataset)))
+    random.shuffle(indices)
+    split = int(len(surrogate_dataset)*0.9)
+    train_indices = indices[:split]
+    valid_indices = indices[split:]
+
+    train_dataset = Subset(surrogate_dataset, train_indices)
+    valid_dataset = Subset(surrogate_dataset, valid_indices)
+
+    loss_matching = HungarianMatching(
+        feature_dict = surrogate_dataset.feature_dict,
+        loss_factors = config.loss.loss_factors,
+        fake_penalty = config.loss.fake_penalty,
+        missing_penalty = config.loss.missing_penalty,
+        classification = config.surrogate.classification,
+        regression = config.surrogate.regression,
+    )
+
 
     if os.path.isfile(surrogate_save_path):
-        surrogate: Surrogate = torch.load(surrogate_save_path)
-        surrogate_dataset = SurrogateDataset(surrogate_df, means=surrogate.means, stds=surrogate.stds)
+        print ('Loading surrogate')
+        surrogate: Surrogate = torch.load(surrogate_save_path,weights_only=False)
+        print (surrogate)
     else:
         if os.path.isfile(surrogate_previous_path):
+            print ('Loading previous surrogate')
             surrogate: Surrogate = torch.load(surrogate_previous_path)
-            surrogate_dataset = SurrogateDataset(surrogate_df, means=surrogate.means, stds=surrogate.stds)
         else:
-            surrogate_dataset = SurrogateDataset(surrogate_df)
-            surrogate = Surrogate(*surrogate_dataset.shape, surrogate_dataset.means, surrogate_dataset.stds)
-            pre_train(surrogate, surrogate_dataset, config.surrogate.n_epoch_pre)
-
-        logger.info("Surrogate Training")
-        n_epochs_main = config.surrogate.n_epochs_main
-        surrogate.train_model(surrogate_dataset, batch_size=1024, n_epochs=n_epochs_main // 2, lr=0.005)
-        surrogate_loss = surrogate.train_model(surrogate_dataset, batch_size=1024, n_epochs=n_epochs_main, lr=0.0003)
-
-        surrogate_lr = 0.001 * (1 if parameter_dict.iteration <= 50 else 0.5)
-
-        while not surrogate.update_best_surrogate_loss(surrogate_loss):
-            logger.info("Surrogate retraining")
-            pre_train(surrogate, surrogate_dataset, config.surrogate.n_epoch_pre)
-            surrogate.train_model(
-                surrogate_dataset,
-                batch_size=256,
-                n_epochs=n_epochs_main // 5,
-                lr=5 * surrogate_lr
-            )
-            surrogate.train_model(
-                surrogate_dataset,
-                batch_size=1024,
-                n_epochs=n_epochs_main // 2,
-                lr=1 * surrogate_lr
-            )
-            surrogate.train_model(
-                surrogate_dataset,
-                batch_size=1024,
-                n_epochs=n_epochs_main // 2,
-                lr=0.3 * surrogate_lr)
-            surrogate_loss = surrogate.train_model(
-                surrogate_dataset,
-                batch_size=1024,
-                n_epochs=n_epochs_main // 2,
-                lr=0.1 * surrogate_lr,
+            print ('Creating surrogate')
+            surrogate = Surrogate(
+                shapes = surrogate_dataset.get_shapes(),
+                means = surrogate_dataset.get_means(),
+                stds = surrogate_dataset.get_stds(),
+                max_seq_len = surrogate_dataset.max_seq_len,
+                feature_dict = surrogate_dataset.feature_dict,
+                classification = config.surrogate.classification,
+                regression = config.surrogate.regression,
+                multiplicity = config.surrogate.multiplicity,
+                loss_factors = config.surrogate.loss_factors,
             )
 
-    torch.save(surrogate, surrogate_save_path)
+            print (surrogate)
+
+            plotter = LossPlotting()
+
+
+            surrogate.train_model(
+                train_dataset,
+                valid_dataset,
+                n_epochs = 100,
+                batch_size = 256,
+                lr = 1e-3,
+                teacher_forcing = 1.0,
+                plotter = plotter,
+            )
+            surrogate.train_model(
+                train_dataset,
+                valid_dataset,
+                n_epochs = 100,
+                batch_size = 256,
+                lr = 1e-4,
+                teacher_forcing = 1.0,
+                plotter = plotter,
+            )
+            surrogate.train_model(
+                train_dataset,
+                valid_dataset,
+                n_epochs = 100,
+                batch_size = 256,
+                lr = 1e-5,
+                teacher_forcing = 1.0,
+                plotter = plotter,
+            )
+            #surrogate.train_model(
+            #    train_dataset,
+            #    valid_dataset,
+            #    n_epochs = 10,
+            #    batch_size = 1024,
+            #    lr = 1e-4,
+            #    teacher_forcing = 0.5,
+            #    plotter = plotter,
+            #)
+
+
+#            surrogate.train_model(
+#                train_dataset,
+#                valid_dataset,
+#                n_epochs = 25,
+#                batch_size = 64,
+#                lr = 1e-4,
+#                teacher_forcing = 0.75,
+#                plotter = plotter,
+#            )
+
+            plotter.plot(
+                os.path.join(
+                    results_dir,
+                    "plots",
+                    "validation",
+                    "surrogate",
+                    "losses",
+                    f"loss_{iteration}.png",
+                )
+            )
+
+            torch.save(surrogate, surrogate_save_path)
+
+        train_samples, train_samples_mask, train_times = surrogate.inference(
+            dataset = train_dataset,
+            batch_size = 1024,
+            oversampling = config.loss.oversampling,
+        )
+        valid_samples, valid_samples_mask, valid_times = surrogate.inference(
+            dataset = valid_dataset,
+            batch_size = 1024,
+            oversampling = config.loss.oversampling,
+        )
+
+        validation_plot(
+            loss_matching = loss_matching,
+            savepath = os.path.join(
+                results_dir,
+                "plots",
+                "validation",
+                "surrogate",
+                "on_trainingData",
+                f"plot_{iteration}.png",
+            ),
+            true_part = surrogate_dataset.true_part[train_indices],
+            true_mask = surrogate_dataset.true_mask[train_indices],
+            reco_part = surrogate_dataset.reco_part[train_indices],
+            reco_mask = surrogate_dataset.reco_mask[train_indices],
+            samp_part = train_samples,
+            samp_mask = train_samples_mask,
+            reco_time = surrogate_dataset.reco_time[train_indices],
+            samp_time = train_times,
+        )
+        validation_plot(
+            loss_matching = loss_matching,
+            savepath = os.path.join(
+                results_dir,
+                "plots",
+                "validation",
+                "surrogate",
+                "on_validationData",
+                f"plot_{iteration}.png",
+            ),
+            true_part = surrogate_dataset.true_part[valid_indices],
+            true_mask = surrogate_dataset.true_mask[valid_indices],
+            reco_part = surrogate_dataset.reco_part[valid_indices],
+            reco_mask = surrogate_dataset.reco_mask[valid_indices],
+            samp_part = valid_samples,
+            samp_mask = valid_samples_mask,
+            reco_time = surrogate_dataset.reco_time[valid_indices],
+            samp_time = valid_times,
+        )
+
+
+        surrogate_dataset.samp_part, surrogate_dataset.samp_mask, surrogate_dataset.samp_time = surrogate.inference(
+            dataset = surrogate_dataset,
+            batch_size = 1024,
+            oversampling = config.loss.oversampling,
+        )
+
+        for i in range(20):
+            surrogate_dataset.plot(
+                config = config,
+                idx = train_indices[i],
+                savepath = os.path.join(
+                    os.path.dirname(output_df_path),
+                    f'event_train_{i}.png',
+                )
+            )
+            surrogate_dataset.plot(
+                config = config,
+                idx = valid_indices[i],
+                savepath = os.path.join(
+                    os.path.dirname(output_df_path),
+                    f'event_valid_{i}.png',
+                )
+            )
+
+        output_dense_path = os.path.join(os.path.dirname(output_df_path),'reco_output_dense')
+        surrogate_dataset.save_dense(output_dense_path)
 
     # Optimization
     optimizer = Optimizer(parameter_dict=parameter_dict)
@@ -150,7 +291,7 @@ def training_loop(
         dataset=surrogate_dataset,
         batch_size=config.optimizer.batch_size,
         n_epochs=config.optimizer.n_epochs,
-        reconstruction_loss=reconstruction_loss_function,
+        loss_matching = loss_matching,
         additional_constraints=constraints,
         parameter_optimizer_savepath=parameter_optimizer_savepath,
         lr=config.optimizer.lr

@@ -70,7 +70,7 @@ if __name__ == "__main__":
     ui_interface.container_extra_flags = ""
     #ui_interface.container_extra_flags = "-B /software,/cephfs"
     ui_interface.verbose = True
-    results_dir: str = "/cephfs/dice/users/lw23382/AIDO/aido_e2e_v4"
+    results_dir: str = "/cephfs/dice/users/lw23382/AIDO/aido_e2e_v10"
 
     # Non optimizable #
     parameters = [
@@ -94,7 +94,7 @@ if __name__ == "__main__":
                 "G4_Fe",
                 discrete_values=["G4_Pb", "G4_Fe"],
                 cost=[25, 4.166],
-                probabilities=[1.0, 0.0],
+                probabilities=[0.0, 1.0],
             )
         )
         parameters.append(

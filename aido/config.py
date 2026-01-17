@@ -14,9 +14,42 @@ class OptimizerConfig:
 
 @dataclass
 class SurrogateConfig:
-    n_epoch_pre: int = 24
-    n_epochs_main: int = 40
+    n_epochs: int = 100
+    batch_size: int = 64
+    lr: float = 1e-4
+    regression: Tuple[str] = (
+        'E',
+        'pos',
+    )
+    classification: Tuple[str] = (
+        'id',
+    )
+    ordering: str = 'E'
+    loss_factors: Dict[str, float] = field(
+        default_factory = lambda : {
+            "pos"        : 1.0,
+            "E"          : 2.0,
+            "id"         : 100.0,
+            'time'       : 1.0,
+            'mult'       : 1.0,
+        }
+    )
+    multiplicity: str = 'hard'
+    timing: bool = True
 
+
+@dataclass
+class LossConfig:
+    loss_factors: Dict[str, float] = field(
+        default_factory = lambda : {
+            "pos"        : 100.0,
+            "E"          : 10.0,
+            "id"         : 1.0,
+        }
+    )
+    fake_penalty: float = 10.
+    missing_penalty: float = 10.
+    oversampling: int = 1
 
 @dataclass
 class SimulationConfig:
@@ -41,7 +74,7 @@ class AIDOConfig:
     json file with updated values must be placed in the AIDO root directory.
 
     Default fields:
-    
+
     - Optimizer:
         - optimizer.lr: float = 0.02 (>0)
         - optimizer.batch_size: int = 512
@@ -64,6 +97,7 @@ class AIDOConfig:
     surrogate: SurrogateConfig = field(default_factory=SurrogateConfig)
     simulation: SimulationConfig = field(default_factory=SimulationConfig)
     scheduler: SchedulerConfig = field(default_factory=SchedulerConfig)
+    loss: SchedulerConfig = field(default_factory=LossConfig)
 
     @classmethod
     def from_json(cls, file_path: str) -> Self:
@@ -80,7 +114,7 @@ class AIDOConfig:
                 FileNotFoundError. This is to ensure that the code can still run despite an invalid
                 config.
             Warning: If any Exception is raised while reading in the json file, e.g. if it is invalid
-                or wrongly formatted, a warning is displayed. Will show the Error message for debugging.        
+                or wrongly formatted, a warning is displayed. Will show the Error message for debugging.
         """
         try:
             with open(file_path, "r") as file:
@@ -93,17 +127,18 @@ class AIDOConfig:
             return cls()
 
         return cls(
-            optimizer=OptimizerConfig(**data["optimizer"]),
-            surrogate=SurrogateConfig(**data["surrogate"]),
-            simulation=SimulationConfig(**data["simulation"]),
-            scheduler=SchedulerConfig(**data["scheduler"])
+            optimizer = OptimizerConfig(**data["optimizer"]),
+            surrogate = SurrogateConfig(**data["surrogate"]),
+            simulation = SimulationConfig(**data["simulation"]),
+            scheduler = SchedulerConfig(**data["scheduler"]),
+            loss = LossConfig(**data["loss"]),
         )
 
     def to_json(self, file_path: str) -> None:
         """Write the current values to a json file
 
         Args:
-            file_path (str): The output file path        
+            file_path (str): The output file path
         """
         with open(file_path, "w") as file:
             json.dump(self.as_dict(), file, indent=4)
@@ -150,7 +185,7 @@ class AIDOConfig:
 
         Args:
             key (str): A dot-separated name
-        
+
         Returns:
             Any: The attribute value corresponding to the key
         """
@@ -165,14 +200,14 @@ class AIDOConfig:
 
         Args:
             new_dict (dict): A dictionary with the new values, with the keys being in the dot-separated
-                format used by :meth:`AIDOConfig.set_value`        
+                format used by :meth:`AIDOConfig.set_value`
         """
         for key, value in new_dict.items():
             self.set_value(key, value)
 
     def as_dict(self) -> Dict:
         """Return all values from this Config class as a dict
-        
+
         Returns:
             dict: Nested dictionary with subclasses also being dicts
         """

@@ -130,7 +130,7 @@ class Optimizer(torch.nn.Module):
             dataset: SurrogateDataset,
             batch_size: int,
             n_epochs: int,
-            reconstruction_loss: Callable[[torch.Tensor, torch.Tensor], torch.Tensor],
+            loss_matching: Callable[[torch.Tensor, torch.Tensor], torch.Tensor],
             additional_constraints: None | Callable[[SimulationParameterDictionary, Dict], torch.Tensor] = None,
             parameter_optimizer_savepath: str | os.PathLike | None = None,
             device: str | None = None,
@@ -155,6 +155,7 @@ class Optimizer(torch.nn.Module):
         self.device = device or self.device
         self.to(self.device)
 
+
         self.starting_parameters_continuous = self.parameter_module.continuous_tensors().clone().detach()
 
         for param_group in self.optimizer.param_groups:
@@ -171,21 +172,19 @@ class Optimizer(torch.nn.Module):
             epoch_constraints_loss = 0.0
             stop_epoch = False
 
-            for batch_idx, (_parameters, context, targets, _reconstructed) in enumerate(data_loader):
-                context: torch.Tensor = context.to(self.device)
-                targets: torch.Tensor = targets.to(self.device)
+            for batch_idx, batch in enumerate(data_loader):
                 parameters_batch: torch.Tensor = self.parameter_module()
+                batch = self.surrogate_model.move_batch(batch,parameters_batch.device)
+                batch['params'] = parameters_batch.expand(batch['params'].shape[0],-1,-1)
 
-                surrogate_output = self.surrogate_model.sample_forward(
-                    parameters_batch,
-                    context,
-                    targets
-                )
-                surrogate_reconstruction_loss = reconstruction_loss(
-                    dataset.unnormalize_features(targets, index=2),
-                    dataset.unnormalize_features(surrogate_output, index=2)
-                )
-                loss = surrogate_reconstruction_loss.mean()
+                samples,mask,time = self.surrogate_model.sample(batch)
+
+                loss = loss_matching(
+                    batch['true']['data'],
+                    batch['true']['mask'],
+                    samples,
+                    mask,
+                ).mean()
                 surrogate_loss_detached = loss.item()
                 constraints_loss = self.other_constraints(
                     additional_constraints,

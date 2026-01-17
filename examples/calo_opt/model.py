@@ -7,6 +7,7 @@ from tqdm.auto import tqdm
 import torch
 from torch import nn
 from torch_geometric.loader import DataLoader
+from sklearn.metrics import confusion_matrix
 
 from fastgraphcompute.gnn_ops import GravNetOp
 from fastgraphcompute.object_condensation import ObjectCondensation
@@ -28,9 +29,9 @@ class GravBlock(nn.Module):
 
         self.mlp = nn.Sequential(
             nn.Linear(dim_in,dim_embed),
-            nn.ReLU(),
+            nn.ELU(),
             nn.Linear(dim_embed,dim_embed),
-            nn.ReLU(),
+            nn.ELU(),
             nn.Linear(dim_embed,dim_embed),
         )
         self.grav_layer = GravNetOp(
@@ -51,7 +52,7 @@ class BufferValue(nn.Module):
         super().__init__()
         if torch.is_tensor(values):
             self.values = nn.Parameter(values, requires_grad=False)
-        elif isinstance(values,(int,float)):
+        elif isinstance(values, (int, float, list, tuple)):
             self.values = nn.Parameter(torch.tensor([values]), requires_grad=False)
         else:
             raise TypeError(f'Type {type(values)} not implemented')
@@ -97,8 +98,8 @@ class GravNetModel(nn.Module):
         self.dim_out = 32
         self.dim_space = 4
         self.dim_propagate = 16
-        self.n_blocks = 6
-        self.k = 128
+        self.n_blocks = 4
+        self.k = 64
 
         self.init_layers = nn.ModuleDict(
             {
@@ -126,30 +127,29 @@ class GravNetModel(nn.Module):
 
         self.mlp = nn.Sequential(
             nn.Linear(self.n_blocks * self.dim_out, 256),
-            nn.ReLU(),
+            nn.ELU(),
             nn.Linear(256, 256),
-            nn.ReLU(),
+            nn.ELU(),
             nn.Linear(256, 256),
-            nn.ReLU(),
+            nn.ELU(),
         )
 
         self.heads = nn.ModuleDict(
             {
                 'beta' : nn.Sequential(
                     nn.Linear(256,128),
-                    nn.ReLU(),
+                    nn.ELU(),
                     nn.Linear(128,64),
-                    nn.ReLU(),
+                    nn.ELU(),
                     nn.Linear(64,1),
                     nn.Sigmoid(),
                 ),
                 'embedding' : nn.Sequential(
                     nn.Linear(256,128),
-                    nn.ReLU(),
+                    nn.ELU(),
                     nn.Linear(128,64),
-                    nn.ReLU(),
-                    nn.Linear(64,1),
-                    nn.Sigmoid(),
+                    nn.ELU(),
+                    nn.Linear(64,3),
                 ),
             }
         )
@@ -161,9 +161,9 @@ class GravNetModel(nn.Module):
         for name in regression:
             self.heads[name] = nn.Sequential(
                     nn.Linear(256,128),
-                    nn.ReLU(),
+                    nn.ELU(),
                     nn.Linear(128,64),
-                    nn.ReLU(),
+                    nn.ELU(),
                     nn.Linear(64,self.shapes['particles'][name].values[0]),
                 )
             nn.Linear(256,self.shapes['particles'][name].values[0])
@@ -171,9 +171,9 @@ class GravNetModel(nn.Module):
         for name in classification:
             self.heads[name] = nn.Sequential(
                     nn.Linear(256,128),
-                    nn.ReLU(),
+                    nn.ELU(),
                     nn.Linear(128,64),
-                    nn.ReLU(),
+                    nn.ELU(),
                     nn.Linear(64,self.shapes['particles'][name].values[0]),
                 )
             self.loss_functions[name] = nn.CrossEntropyLoss(reduction='none') if self.shapes['particles'][name].values[0] > 1 else nn.BCELoss(reduction='mean')
@@ -245,6 +245,8 @@ class GravNetModel(nn.Module):
 
     def apply_preprocessing(self,batch):
         for node in batch.node_types:
+            if node not in self.means.keys() or node not in self.stds.keys():
+                continue
             for key,values in batch[node].items():
                 if key in self.means[node].keys() and key in self.stds[node].keys():
                     batch[node][key] = (values - self.means[node][key].values) / self.stds[node][key].values
@@ -272,9 +274,10 @@ class GravNetModel(nn.Module):
         batch_size: int,
         n_epochs: int,
         lr: float,
+        annealing = None,
         plotter = None,
     ):
-        print(f"Reconstruction Training: {lr=}, {batch_size=}")
+        print(f"Reconstruction Training: {n_epochs=} {lr=}, {batch_size=}")
         train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
         valid_loader = DataLoader(valid_dataset, batch_size=batch_size, shuffle=False)
 
@@ -284,15 +287,29 @@ class GravNetModel(nn.Module):
         self.to(self.device)
         self.train()
 
+        if torch.cuda.is_available():
+            torch.cuda.reset_peak_memory_stats()
+            batch = next(iter(train_loader))
+            batch = batch.to("cuda")
+            with torch.amp.autocast('cuda'):
+                out = self(batch)
+            print("Peak memory during forward:", torch.cuda.max_memory_allocated() / 1e9, "GB")
 
-        torch.cuda.reset_peak_memory_stats()
-        batch = next(iter(train_loader))
-        batch = batch.to("cuda")
-        with torch.amp.autocast('cuda'):
-            out = self(batch)
-        print("Peak memory during forward:", torch.cuda.max_memory_allocated() / 1e9, "GB")
+        def get_factor(name,epoch):
+            if name in self.loss_factors.keys():
+                factor = self.loss_factors[name].values.item()
+            else:
+                factor = 1.
+            if annealing is not None and name not in ['total','attraction','repulsion','beta']:
+                midpoint, sharpness = annealing
+                factor *= torch.sigmoid(torch.tensor((epoch - midpoint) / sharpness))
+            return factor
 
         for epoch in range(n_epochs):
+            if epoch > 50:
+                for param_group in self.optimizer.param_groups:
+                    param_group['lr'] = lr / 10
+
             # Training #
             self.train()
             train_losses = {
@@ -305,7 +322,7 @@ class GravNetModel(nn.Module):
             for batch_idx, batch in tqdm(enumerate(train_loader),total=len(train_loader),desc='Training batches',leave=False):
                 # Move to device #
                 batch = batch.to(self.device)
-                # Preprocessing #
+                # Preprocessing # # TODO : move to forward
                 batch = self.apply_preprocessing(batch)
                 # Process #
                 outputs = self(batch)
@@ -314,11 +331,7 @@ class GravNetModel(nn.Module):
                 # Total loss #
                 loss_values = []
                 for key,loss in losses.items():
-                    if key in self.loss_factors.keys():
-                        factor = self.loss_factors[key].values
-                    else:
-                        factor = 1.
-                    loss_values.append(factor * loss)
+                    loss_values.append(get_factor(key,epoch) * loss)
                 loss_tot = sum(loss_values)
                 self.optimizer.zero_grad()
                 loss_tot.backward()
@@ -339,7 +352,7 @@ class GravNetModel(nn.Module):
             for batch_idx, batch in tqdm(enumerate(valid_loader),total=len(valid_loader),desc='Validation batches',leave=False):
                 # Move to device #
                 batch = batch.to(self.device)
-                # Preprocessing #
+                # Preprocessing # TODO : move to forward
                 batch = self.apply_preprocessing(batch)
                 # Process #
                 with torch.no_grad():
@@ -349,11 +362,7 @@ class GravNetModel(nn.Module):
                 # Total loss #
                 loss_values = []
                 for key,loss in losses.items():
-                    if key in self.loss_factors.keys():
-                        factor = self.loss_factors[key].values
-                    else:
-                        factor = 1.
-                    loss_values.append(factor * loss)
+                    loss_values.append(get_factor(key,epoch) * loss)
                 loss_tot = sum(loss_values)
                 # Record #
                 for key,val in losses.items():
@@ -364,11 +373,8 @@ class GravNetModel(nn.Module):
             for key in train_losses.keys():
                 if key == 'total':
                     continue
-                if key in self.loss_factors.keys():
-                    factor = self.loss_factors[key].values.item()
-                else:
-                    factor = 1.
-                s += f"{key} = {factor:.2f} x {train_losses[key].mean():7.5f} [{valid_losses[key].mean():7.5f}] + "
+                factor = get_factor(key,epoch)
+                s += f"{key} = {factor:.3f} x {train_losses[key].mean():7.5f} [{valid_losses[key].mean():7.5f}] + "
             print (s)
 
             if plotter is not None:
@@ -396,7 +402,7 @@ class GravNetModel(nn.Module):
         # Perform inferences #
         loader = DataLoader(dataset,batch_size=batch_size,shuffle=False)
         data_list = []
-        for batch_idx, batch in tqdm(enumerate(loader),total=len(loader),desc='Batches',leave=False):
+        for batch_idx, batch in tqdm(enumerate(loader),total=len(loader),desc='Batches',leave=True):
             # Move to device #
             proc_batch = deepcopy(batch).to(self.device)
             # Preprocessing #
@@ -408,7 +414,7 @@ class GravNetModel(nn.Module):
             batch._slice_dict['predictions'] = {}
             batch._inc_dict['predictions'] = {}
             for key,val in outputs.items():
-                setattr(batch['predictions'],key,val)
+                setattr(batch['predictions'],key,val.cpu())
                 batch._slice_dict['predictions'][key] = batch['hits'].ptr
                 batch._inc_dict['predictions'][key] = torch.zeros(len(batch))
             batch['predictions'].num_nodes = batch['hits'].num_nodes
@@ -417,16 +423,16 @@ class GravNetModel(nn.Module):
             # Batch->data_list #
             data_list.extend(batch.to_data_list())
 
-        for data in tqdm(data_list,desc='Events',leave=False):
-            beta = data['predictions']['beta']
-            embedding = data['predictions']['embedding']
+        def condense(beta,embedding,t_beta,t_dist):
             beta_order = beta.argsort(descending=True,dim=0)
             vertex_indices = []
+            vertex_embeddings = torch.tensor([])
             for idx in beta_order:
                 if beta[idx] < t_beta:
                     break
                 if len(vertex_indices) == 0:
                     vertex_indices.append(idx)
+                    vertex_embeddings = embedding[idx]
                 else:
                     prev_x = torch.concatenate(
                         [
@@ -434,21 +440,55 @@ class GravNetModel(nn.Module):
                         ],
                         dim = 0,
                     )
-                    vertex_x = embedding[idx]
-                    dist = torch.norm(prev_x - vertex_x, dim=1)
+                    vertex_emb = embedding[idx]
+                    dist = torch.norm(vertex_emb- vertex_embeddings, dim=1)
                     if dist.min() > t_dist:
                         vertex_indices.append(idx)
+                        vertex_embeddings = torch.cat([vertex_embeddings,vertex_emb],dim=0)
             vertex_indices = torch.tensor(vertex_indices).to(torch.int)
+            return vertex_indices,vertex_embeddings
+
+        if t_dist == 'auto':
+            t_dists = torch.linspace(0,1,51)
+            indices = torch.randperm(len(data_list))[:200]
+            results = torch.zeros(len(t_dists))
+            for i,t in tqdm(enumerate(t_dists),desc='Optimising t_dist',total=len(t_dists),leave=True):
+                n_true = []
+                n_reco = []
+                for idx in indices:
+                    n_true.append(data_list[idx]['particles'].num_nodes)
+                    vertex_indices,_ = condense(
+                        beta = data_list[idx]['predictions']['beta'],
+                        embedding = data_list[idx]['predictions']['embedding'],
+                        t_beta = t_beta,
+                        t_dist = t,
+                    )
+                    n_reco.append(len(vertex_indices))
+                cm = torch.from_numpy(confusion_matrix(n_true,n_reco))
+                results[i] = torch.diagonal(cm).sum() / cm.sum()
+            t_dist = round(t_dists[results.argmax()].item(),5)
+            print (f'Found optimal t_dist = {t_dist} : fraction of diagonal elements = {results.max().item()*100:5.2f}%')
+
+
+        for data in tqdm(data_list,desc='Events',leave=True):
+            # Condensation #
+            vertex_indices,vertex_embeddings = condense(
+                beta = data['predictions']['beta'],
+                embedding = data['predictions']['embedding'],
+                t_beta = t_beta,
+                t_dist = t_dist,
+            )
             data['vertices'].idx = vertex_indices
+            data['vertices'].embedding = vertex_embeddings
             # Obtain particle prediction for the condensation vertices #
-            for key,out in outputs.items():
+            for key in self.heads.keys():
                 if key in ['beta','embedding']:
                     continue
-                out = out * self.stds['particles'][key].values + self.means['particles'][key].values
-                setattr(data['vertices'],key,out[vertex_indices])
+                out = data['predictions'][key]
+                out = out[vertex_indices]
+                out = out * self.stds['particles'][key].values.cpu() + self.means['particles'][key].values.cpu()
+                setattr(data['vertices'],key,out)
 
-        #from IPython import embed; embed()
-
-        return CaloGraphDataset.from_data_list(data_list)
+        return CaloGraphDataset.from_data_list(data_list), t_dist
 
 

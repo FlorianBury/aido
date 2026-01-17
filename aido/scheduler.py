@@ -205,17 +205,17 @@ class OptimizationTask(AIDOTask):
                 new_param_dict = torch_safe_wrapper(
                     training_loop,
                     reco_file_paths_dict=self.reco_paths_dict["own_path"],
-                    reconstruction_loss_function=interface.loss,
                     constraints=interface.constraints,
+                    iteration=self.iteration,
                 )
-            except torch.cuda.OutOfMemoryError as e:
+            except torch.cuda.OutOfMemoryError:
                 training_loop_out_of_memory = True
                 num_training_loop_tries += 1
                 torch.cuda.empty_cache()
                 time.sleep(config.scheduler.training_delay_between_retries)
 
                 if num_training_loop_tries > config.scheduler.training_num_retries:
-                    raise e
+                    raise
 
         new_param_dict.iteration = self.iteration + 1
         # TODO Change datetime too
@@ -250,6 +250,7 @@ def start_scheduler(
     os.makedirs(f"{results_dir}/plots/validation/reco_model/losses", exist_ok=True)
     os.makedirs(f"{results_dir}/plots/validation/surrogate/on_trainingData", exist_ok=True)
     os.makedirs(f"{results_dir}/plots/validation/surrogate/on_validationData", exist_ok=True)
+    os.makedirs(f"{results_dir}/plots/validation/surrogate/losses", exist_ok=True)
     os.makedirs(f"{results_dir}/loss/optimizer", exist_ok=True)
     os.makedirs(f"{results_dir}/loss/constraints", exist_ok=True)
     os.makedirs(f"{results_dir}/loss/surrogate", exist_ok=True)

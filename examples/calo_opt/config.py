@@ -6,65 +6,63 @@ from aido.logger import logger
 
 @dataclass
 class SimulationConfig:
-    number_simulations_per_particle: int = 100
-    number_stitched_events: int = 200
+    number_simulations_per_particle: int = 250
+    number_stitched_events: int = 1000
     mean_number_particles_per_event: int = 5
-    min_distance_cut : float = 5.
+    min_distance_cut : float = 0.
     minEnergy_GeV: float = 5.
     maxEnergy_GeV: float = 100.
     particle_types: Tuple[str] = (
         "e+",
         "gamma",
+        "pi0",
         #"pi+",
-        #"pi0",
         #"proton",
         #"neutron",
     )
 
+@dataclass
+class TimingConfig:
+    enabled: bool = True
+    runs : int = 1
 
 @dataclass
 class GraphConfig:
     retrain: bool = False
+    n_epochs: int = 20
+    batch_size: int = 256
+    lr: float = 1e-3
+    annealing: Tuple[float] = (10,1.)
     inputs: Tuple[str] = (
         "pos",
         "E",
         "layer",
     )
     regression: Tuple[str] = (
-        #"E",
+        "E",
         "pos",
     )
     classification: Tuple[str] = (
-        #"id",
+        "id",
     )
     loss_factors: Dict[str, float] = field(
         default_factory = lambda : {
             "attraction" : 1.0,
             "repulsion"  : 1.0,
-            "beta"       : 10.0,
-        #    "E"          : 0.1,
-            "pos"        : 10.0,
-        #    "id"         : 0.1,
+            "beta"       : 20.0,
+            "pos"        : 100.0,
+            "E"          : 100.0,
+            "id"         : 10.0,
         }
     )
     t_beta: float = 0.1
-    t_dist: float = 0.1
-
-
-#    n_epochs_pre: int = 50
-#    n_epochs_main: int = 50
-#    batch_size: int = 512
-#    early_stopping: int = 50
-#    lr_pre: float  = 1e-2
-#    lr_main: Tuple[float] = (5e-3, 1e-3, 5e-4)
-#    targets: Tuple[str] = (
-#        'true_energy',
-#    )
+    t_dist: str = "auto"
 
 @dataclass
 class CaloConfig:
-    graph : GraphConfig = field(default_factory=GraphConfig)
+    graph: GraphConfig = field(default_factory=GraphConfig)
     simulation: SimulationConfig = field(default_factory=SimulationConfig)
+    timing: TimingConfig = field(default_factory=TimingConfig)
 
     @classmethod
     def from_json(cls, file_path: str):
@@ -81,6 +79,7 @@ class CaloConfig:
         return cls(
             graph = GraphConfig(**data["graph"]),
             simulation = SimulationConfig(**data["simulation"]),
+            timing = TimingConfig(**data["timing"]),
         )
 
     def to_json(self, file_path: str):

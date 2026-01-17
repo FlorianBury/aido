@@ -4,7 +4,11 @@ from typing import Callable
 
 import b2luigi
 
-CUDA_FORK_ERROR_MSG = "Cannot re-initialize CUDA in forked subprocess"
+CUDA_FATAL_ERRORS = (
+    "Cannot re-initialize CUDA",
+    "CUDA error: initialization error",
+    "driver shutting down",
+)
 
 
 class AIDOTask(b2luigi.Task):
@@ -34,12 +38,25 @@ def torch_safe_wrapper(
     a subprocess. If any further errors are raised afterwards, they are return. In
     case of no errors, we return the result of the function.
     """
+    CUDA_FATAL_ERRORS = (
+        "Cannot re-initialize CUDA",
+        "CUDA error: initialization error",
+        "driver shutting down",
+    )
     try:
         return func(*args, **kwargs)
     except RuntimeError as e:
-        if CUDA_FORK_ERROR_MSG not in str(e):
+        msg = str(e)
+
+        # Not a fatal CUDA error → propagate
+        if not any(err in msg for err in CUDA_FATAL_ERRORS):
             raise
 
-        with ProcessPoolExecutor(mp_context=mp.get_context("spawn"), max_workers=1) as executor:
+        # Fatal CUDA state → must run in fresh process
+        ctx = mp.get_context("spawn")
+        with ProcessPoolExecutor(
+            mp_context=ctx,
+            max_workers=1,
+        ) as executor:
             future = executor.submit(func, *args, **kwargs)
             return future.result()

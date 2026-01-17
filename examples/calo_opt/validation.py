@@ -41,8 +41,8 @@ def energy_plot(ax,data_list):
         norm = matplotlib.colors.LogNorm(),
     )
     plt.colorbar(H[3],ax=ax)
-    ax.set_xlabel(r'Reco $\sum E_{\text{cell}}$')
-    ax.set_ylabel(r'True $\sum E_{\text{cell}}$')
+    ax.set_xlabel(r'Reco $\sum E_{\text{particles}}$')
+    ax.set_ylabel(r'True $\sum E_{\text{particles}}$')
 
 def id_plot(ax,data_list):
     id_true = np.array([
@@ -56,7 +56,7 @@ def id_plot(ax,data_list):
         for val in data['vertices']['id'].argmax(dim=-1)
     ])
 
-    bins = np.arange(max(id_true.max(),id_reco.max()))
+    bins = np.arange(max(id_true.max(),id_reco.max())+2)
     ax.hist(
         id_true,
         bins = bins,
@@ -72,7 +72,7 @@ def id_plot(ax,data_list):
         label = 'Reco',
     )
     ax.legend()
-    ax.set_yscale('log')
+    ax.set_ylim(0,None)
     ax.set_xlabel(r'Ids')
 
 
@@ -86,8 +86,10 @@ def validation_plot(
     data_list = [dataset[i] for i in range(len(dataset))]
 
     number_plot(axs[0],data_list)
-    #energy_plot(axs[1],data_list)
-    #id_plot(axs[2],data_list)
+    if 'E' in data_list[0]["vertices"].keys():
+        energy_plot(axs[1],data_list)
+    if 'id' in data_list[0]["vertices"].keys():
+        id_plot(axs[2],data_list)
 
 
     if fig_savepath is not None:

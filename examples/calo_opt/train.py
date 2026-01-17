@@ -21,6 +21,7 @@ from utils import LossPlotting, EarlyStopping
 from config import CaloConfig
 from model import GravNetModel
 from validation import validation_plot
+from timing import Timer
 
 #def pre_train(
 #    model: Reconstruction,
@@ -96,21 +97,31 @@ def train(
         model.train_model(
             train_dataset,
             valid_dataset,
-            batch_size = 64,
-            n_epochs = 100,
-            lr = 1e-3,
+            n_epochs = config.graph.n_epochs,
+            batch_size = config.graph.batch_size,
+            lr = config.graph.lr,
+            annealing = config.graph.annealing,
             plotter = loss_plotter,
             #early_stopping = reco_early_stopping,
         )
-        #model.train_model(
-        #    train_dataset,
-        #    valid_dataset,
-        #    batch_size = 64,
-        #    n_epochs = 5,
-        #    lr = 1e-4,
-        #    plotter = loss_plotter,
-        #    #early_stopping = reco_early_stopping,
-        #)
+        model.train_model(
+            train_dataset,
+            valid_dataset,
+            n_epochs = 10,
+            batch_size = config.graph.batch_size,
+            lr = config.graph.lr / 10,
+            plotter = loss_plotter,
+            #early_stopping = reco_early_stopping,
+        )
+        model.train_model(
+            train_dataset,
+            valid_dataset,
+            n_epochs = 10,
+            batch_size = config.graph.batch_size,
+            lr = config.graph.lr / 100,
+            plotter = loss_plotter,
+            #early_stopping = reco_early_stopping,
+        )
 
         torch.save(model,model_previous_path)
 
@@ -125,7 +136,7 @@ def train(
             )
         )
 
-    train_dataset = model.inference(
+    train_dataset,t_dist = model.inference(
         dataset = train_dataset,
         batch_size = 200,
         t_beta = config.graph.t_beta,
@@ -142,11 +153,11 @@ def train(
             f"validation_{iteration}.png",
         )
     )
-    valid_dataset = model.inference(
+    valid_dataset,_ = model.inference(
         dataset = valid_dataset,
         batch_size = 200,
         t_beta = config.graph.t_beta,
-        t_dist = config.graph.t_dist,
+        t_dist = t_dist,
     )
     validation_plot(
         valid_dataset,
@@ -161,72 +172,27 @@ def train(
     )
 
     output_dataset = concat_dataset([train_dataset,valid_dataset])
+
+    if config.timing.enabled:
+        timer = Timer(
+            model,
+            runs = config.timing.runs,
+        )
+        output_dataset = timer(output_dataset)
+
+
     output_dataset.save(output_graph_path)
 
     print (f'Saved output dataset to {output_graph_path}')
 
-#        for lr in config.reconstruction.lr_main:
-#            reco_model.train_model(
-#                reco_train_dataset,
-#                reco_valid_dataset,
-#                batch_size = config.reconstruction.batch_size,
-#                n_epochs = config.reconstruction.n_epochs_main,
-#                lr = lr,
-#                plotter = reco_loss_plotter,
-#                early_stopping = reco_early_stopping,
-#            )
-#        reco_early_stopping.restore_best_weights(reco_model)
-#
-#        # Validation #
-#        torch.save(reco_model, model_previous_path)
-#
-#        reco_validator = ReconstructionValidation(reco_model)
-#        reco_train_mf = reco_validator.validate(reco_train_dataset)
-#        reco_valid_mf = reco_validator.validate(reco_valid_dataset)
-#
-#        reco_loss_plotter.plot(
-#            os.path.join(
-#                results_dir,
-#                "plots",
-#                "validation",
-#                "reco_model",
-#                "losses",
-#                f"loss_{iteration}.png",
-#            )
-#        )
-#        reco_validator.plot(
-#            reco_train_mf,
-#            os.path.join(
-#                results_dir,
-#                "plots",
-#                "validation",
-#                "reco_model",
-#                "on_trainingData",
-#                f"validation_{iteration}.png",
-#            )
-#        )
-#        reco_validator.plot(
-#            reco_valid_mf,
-#            os.path.join(
-#                results_dir,
-#                "plots",
-#                "validation",
-#                "reco_model",
-#                "on_validationData",
-#                f"validation_{iteration}.png",
-#            )
-#        )
-#        # Combined mf for surrogate task #
-#        reco_mf = super_concat([reco_train_mf,reco_valid_mf])
-#        class_mf = super_concat([class_train_mf,class_valid_mf])
-#
-#        reco_df = reco_mf.to_pandas()
-#        class_df = class_mf.to_pandas()
-#        common_cols = [col for col in reco_df.columns if col in class_df.columns]
-#        output_df = pd.merge(reco_df,class_df,on=common_cols,how='outer')
-#        output_df.to_parquet(output_graph_path)
-#        print (f'Saved output df to {output_graph_path}')
-
+    for i in range(20):
+        output_dataset.plot(
+            idx = i,
+            path = os.path.join(
+                os.path.dirname(output_graph_path),
+                f'event_{i}.png'
+            ),
+        )
 
 if __name__ == "__main__":
     config_path = sys.argv[1]
