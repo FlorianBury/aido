@@ -1,6 +1,7 @@
-import glob
 import os
 import sys
+import math
+import glob
 import pathlib
 import re
 from typing import Iterable
@@ -10,6 +11,9 @@ import torchmetrics
 import matplotlib
 import matplotlib.colors as mcolors
 import matplotlib.pyplot as plt
+from matplotlib.colors import ListedColormap, BoundaryNorm
+from matplotlib.cm import ScalarMappable
+
 from sklearn.metrics import roc_curve, auc
 from sklearn.metrics import ConfusionMatrixDisplay, confusion_matrix
 import numpy as np
@@ -28,7 +32,16 @@ class CaloOptPlotting:
         for file_name in glob.glob(f"{results_dir}/task_outputs/iteration=*/validation=False/reco_output_df"):
             iteration = int(re.search(r"iteration=(\d+)", file_name).group(1))
             self.reco_output_paths[iteration] = file_name
-        self.parameter_paths = {
+        self.simulation_parameter_paths = {
+            iteration : [
+                json_file
+                for json_file in glob.glob(
+                    f"{results_dir}/task_outputs/iteration={iteration}/validation=False/simulation_task_id=*/param_dict.json"
+                )
+            ]
+            for iteration in self.reco_output_paths.keys()
+        }
+        self.optimizer_parameter_paths = {
             iteration : f"{results_dir}/parameters/param_dict_iter_{iteration}.json"
             for iteration in self.reco_output_paths.keys()
         }
@@ -180,8 +193,7 @@ class CaloOptPlotting:
             )
 
         def plot_energy_resolution_all() -> None:
-            sampled_iterations = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
-            sampled_iterations = [0, 5, 10, 15, 20, 25, 30]
+            sampled_iterations = [0, 10, 20, 30, 40, 50]
             colors = plt.cm.coolwarm(np.linspace(0, 1, len(sampled_iterations)))
             fig, ax = plt.subplots()
             bins = np.linspace(-10, 10, 50 + 1)
@@ -229,8 +241,7 @@ class CaloOptPlotting:
 
 
         def plot_classification_roc_all() -> None:
-            sampled_iterations = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
-            sampled_iterations = [0, 5, 10, 15, 20, 25, 30]
+            sampled_iterations = [0, 10, 20, 30, 40, 50]
             fprs = {}
             tprs = {}
             for iteration in sampled_iterations:
@@ -557,7 +568,7 @@ class CaloOptPlotting:
             plt.ylabel("Longitudinal Calorimeter Composition [cm]")
             plt.xlabel("Iteration")
             plt.xlim(0, len(df))
-            plt.ylim(0, 110)
+            plt.ylim(0, 120)
             ax = self.add_plot_header(ax)
             cbar_absorber = plt.cm.ScalarMappable(cmap=absorber_cmap)
             cbar_absorber.set_array([])
@@ -589,11 +600,11 @@ class CaloOptPlotting:
             masks = []
             for param_name, param_value in param_dict.get_current_values(format="dict", types="continuous").items():
                 masks.append(
-                    (abs(df['Parameters'][param_name] - param_value) < 1e-5).values
+                    (abs(df[param_name] - param_value) < 1e-5).values
                 )
             for param_name, param_value in param_dict.get_current_values(format="dict", types="discrete").items():
                 masks.append(
-                    df['Parameters'][f'{param_name}_{param_value}'] == 1
+                    df[f'{param_name}_{param_value}'] == 1
                 )
             idx = np.where(np.logical_and.reduce(masks))[0]
             assert len(idx) > 0
@@ -608,10 +619,23 @@ class CaloOptPlotting:
 
             for iteration in iterations:
                 df = pd.read_parquet(self.reco_output_paths[iteration])
-                param_dict = aido.SimulationParameterDictionary.from_json(self.parameter_paths[iteration])
-                idx = mask_parameters(df,param_dict)
-                reco_losses.append(np.mean(df["Loss"]["Reco_loss"]))
-                class_losses.append(np.mean(df["Loss"]["Class_loss"]))
+                reco_losses.append([math.inf,-math.inf])
+                class_losses.append([math.inf,-math.inf])
+                for param_dict_json in self.simulation_parameter_paths[iteration]:
+                    param_dict = aido.SimulationParameterDictionary.from_json(param_dict_json)
+                    idx = mask_parameters(df['Parameters'],param_dict)
+                    reco_loss = np.mean(df["Loss"]["Reco_loss"][idx])
+                    class_loss = np.mean(df["Loss"]["Class_loss"][idx])
+                    if reco_loss < reco_losses[-1][0]:
+                        reco_losses[-1][0] = reco_loss
+                    if reco_loss > reco_losses[-1][1]:
+                        reco_losses[-1][1] = reco_loss
+                    if class_loss < class_losses[-1][0]:
+                        class_losses[-1][0] = class_loss
+                    if class_loss > class_losses[-1][1]:
+                        class_losses[-1][1] = class_loss
+                param_dict = aido.SimulationParameterDictionary.from_json(self.optimizer_parameter_paths[iteration])
+                idx = mask_parameters(df['Parameters'],param_dict)
                 reco_losses_best.append(np.mean(df["Loss"]["Reco_loss"][idx]))
                 class_losses_best.append(np.mean(df["Loss"]["Class_loss"][idx]))
 
@@ -628,11 +652,13 @@ class CaloOptPlotting:
 
             fig, ax = plt.subplots(figsize=(7, 5))
             ax = self.add_plot_header(ax)
-            plt.plot(
+            plt.fill_between(
                 iterations,
-                reco_losses,
+                reco_losses[:,0],
+                reco_losses[:,1],
+                interpolate = True,
                 color = 'royalblue',
-                linestyle = 'solid',
+                alpha = 0.3,
                 label="Mean Reconstruction Loss " + r"($\mathcal{L}_\text{reco}$)",
             )
             plt.plot(
@@ -641,11 +667,13 @@ class CaloOptPlotting:
                 color = 'royalblue',
                 linestyle = 'dashed',
             )
-            plt.plot(
+            plt.fill_between(
                 iterations,
-                class_losses,
+                class_losses[:,0],
+                class_losses[:,1],
+                interpolate = True,
                 color = 'red',
-                linestyle = 'solid',
+                alpha = 0.3,
                 label="Mean Classification Loss " + r"($\mathcal{L}_\text{class}$)",
             )
             plt.plot(
@@ -660,17 +688,18 @@ class CaloOptPlotting:
                 color = 'green',
                 label="Optimizer Loss " + r"($\mathcal{L}'$)"
             )
-            plt.plot(
+            plt.fill_between(
+                [],
                 [],[],
-                color = 'black',
-                linestyle = 'solid',
-                label = 'Sampled parameters',
+                color = 'grey',
+                alpha = 0.3,
+                label = 'Sampled parameters (current iteration)',
             )
             plt.plot(
                 [],[],
                 color = 'black',
                 linestyle = 'dashed',
-                label = 'Best parameters',
+                label = 'Best parameters (previous iteration)',
             )
             plt.legend(loc='upper right',fontsize=10)
             plt.xlabel("Iteration")
@@ -680,13 +709,190 @@ class CaloOptPlotting:
                 max(iterations.max(),df_loss["Scaled Epoch"].max()),
             )
             plt.ylim(
-                min(reco_losses.min(),class_losses.min(),df_loss["Loss"].min())/2,
-                max(reco_losses.max(),class_losses.max(),df_loss["Loss"].max())*2,
+                min(
+                    [
+                        reco_losses.min(),
+                        class_losses.min(),
+                        reco_losses_best.min(),
+                        class_losses_best.min(),
+                        df_loss["Loss"].min(),
+                    ]
+                ) / 2,
+                max(
+                    [
+                        reco_losses.max(),
+                        class_losses.max(),
+                        reco_losses_best.max(),
+                        class_losses_best.max(),
+                        df_loss["Loss"].max(),
+                    ]
+                ) * 2,
             )
             plt.yscale("log")
             plt.tight_layout()
             plt.savefig(os.path.join(self.results_dir, "plots/loss_evolution.png"))
             plt.close()
+
+        def plot_params(iterations,params_list,params_opt,losses_list,log=False,discrete=False):
+            def format_discrete(array):
+                link = {
+                    'G4_POLYSTYRENE': 0., 'G4_PbWO4': 1.,
+                    'G4_Fe': 0., 'G4_Pb': 1.,
+                }
+                uniq = [key for key in link.keys() if key in array]
+                for name,val in link.items():
+                    if (array==name).sum() > 0:
+                        noise = np.clip(np.random.normal(0, 0.10, size=(array==name).sum()),-0.4,+0.4)
+                        array[array==name] = val + noise + 0.5
+                array = array.astype(np.float32)
+                return array,uniq
+
+            N = len(params_list[0])
+            fig,axs = plt.subplots(ncols=N,nrows=N,figsize=(5*N,4*N))
+            plt.subplots_adjust(
+                left = 0.05,
+                bottom = 0.05,
+                top = 0.95,
+                right = 0.9,
+                wspace = 0.4,
+                hspace = 0.4,
+            )
+            param_names = list(params_list[0].keys())
+            opt_colors = plt.cm.inferno(np.linspace(0, 1, len(params_opt)))[::-1]
+            if discrete:
+                params_opt = [
+                    {name:format_discrete(np.array([val]))[0] for name,val in params.items()}
+                    for params in params_opt
+                ]
+            for i in range(N):
+                xname = param_names[i]
+                xvalues = np.array([params[xname] for params in params_list])
+                if discrete:
+                    xvalues, xticklabels = format_discrete(xvalues)
+                else:
+                    xticklabels = None
+                for j in range(N):
+                    yname = param_names[j]
+                    yvalues = np.array([params[yname] for params in params_list])
+                    if discrete:
+                        yvalues, yticklabels = format_discrete(yvalues)
+                    else:
+                        yticklabels = None
+                    if i == j:
+                        axs[i,j].scatter(
+                            xvalues,
+                            losses_list,
+                            marker = '.',
+                            s = 3,
+                        )
+                        for idx,params in enumerate(params_opt):
+                            axs[i,j].axvline(
+                                params[xname],
+                                color = opt_colors[idx],
+                                linewidth = 0.5,
+                            )
+                        axs[i,j].set_xlabel(xname)
+                        axs[i,j].set_ylabel('Mean loss')
+                        if log:
+                            axs[i,j].set_yscale('log')
+                        axs[i,j].set_ylim(losses_list.min(),losses_list.max())
+                        if xticklabels is not None:
+                            axs[i,j].set_xticks(np.arange(len(xticklabels))+0.5)
+                            axs[i,j].set_xticklabels(xticklabels,fontsize=10,va='center',ha='center')
+                    else:
+                        sc = axs[i,j].scatter(
+                            xvalues,
+                            yvalues,
+                            c = losses_list,
+                            marker = '.',
+                            s = 3,
+                            norm = matplotlib.colors.LogNorm(
+                                vmin=losses_list.min(),
+                                vmax=losses_list.max(),
+                            ) if log else None,
+                        )
+                        for idx,params in enumerate(params_opt):
+                            axs[i,j].scatter(
+                                params[xname],
+                                params[yname],
+                                color = opt_colors[idx],
+                                marker = 'X',
+                                s = 25,
+                            )
+                        axs[i,j].set_xlabel(xname)
+                        axs[i,j].set_ylabel(yname)
+                        axs[i,j].set_xlim(xvalues.min(),xvalues.max())
+                        axs[i,j].set_ylim(yvalues.min(),yvalues.max())
+                        if xticklabels is not None:
+                            axs[i,j].set_xticks(np.arange(len(xticklabels))+0.5)
+                            axs[i,j].set_xticklabels(xticklabels,fontsize=10,va='center',ha='center')
+                        if yticklabels is not None:
+                            axs[i,j].set_yticks(np.arange(len(yticklabels))+0.5)
+                            axs[i,j].set_yticklabels(yticklabels,fontsize=10,rotation=90,va='center',ha='center')
+                        fig.colorbar(sc, ax=axs[i,j], label="Mean loss")
+            cmap = ListedColormap(opt_colors)
+            norm = BoundaryNorm(iterations, cmap.N)
+            mappable = ScalarMappable(norm=norm, cmap=cmap)
+            cax = fig.add_axes([0.95, 0.1, 0.02, 0.85])
+            cbar = fig.colorbar(mappable, cax=cax, pad=0.02, extend='max')
+            cbar.set_label("Iterations", fontsize=32)
+            cbar.set_ticks(iterations)
+            cbar.set_ticklabels(iterations)
+
+            return fig
+
+
+        def plot_loss_surface(loss_name,log) -> None:
+            iterations = np.array(sorted(list(self.reco_output_paths.keys())))
+            disc_params_list = []
+            cont_params_list = []
+            disc_params_opt  = []
+            cont_params_opt  = []
+            losses_list = []
+            for iteration in iterations:
+                df = pd.read_parquet(self.reco_output_paths[iteration])
+                losses = df['Loss'][loss_name]
+                print (iteration)
+                for param_dict_json in self.simulation_parameter_paths[iteration]:
+                    param_dict = aido.SimulationParameterDictionary.from_json(param_dict_json)
+                    idx = mask_parameters(df['Parameters'],param_dict)
+                    cont_params_list.append(param_dict.get_current_values(format="dict", types="continuous"))
+                    disc_params_list.append(param_dict.get_current_values(format="dict", types="discrete"))
+                    losses_list.append(float(losses[idx].mean()))
+                param_dict = aido.SimulationParameterDictionary.from_json(self.optimizer_parameter_paths[iteration])
+                cont_params_opt.append(param_dict.get_current_values(format="dict", types="continuous"))
+                disc_params_opt.append(param_dict.get_current_values(format="dict", types="discrete"))
+            losses_list = np.array(losses_list)
+
+            fig = plot_params(
+                iterations,
+                cont_params_list,
+                cont_params_opt,
+                losses_list,
+                log = log,
+                discrete = False,
+            )
+            fig.savefig(
+                os.path.join(self.results_dir, f"plots/{loss_name.lower()}_continuous_surface.png"),
+                dpi = 200,
+            )
+            plt.close()
+
+            fig = plot_params(
+                iterations,
+                disc_params_list,
+                disc_params_opt,
+                losses_list,
+                log = log,
+                discrete = True,
+            )
+            fig.savefig(
+                os.path.join(self.results_dir, f"plots/{loss_name.lower()}_discrete_surface.png"),
+                dpi = 200,
+            )
+            plt.close()
+
+
 
         def plot_constraints() -> None:
             def cost(parameter_dict: aido.SimulationParameterDictionary) -> float:
@@ -735,6 +941,8 @@ class CaloOptPlotting:
         plot_loss_evolutions()
         plot_calorimeter_sideview()
         plot_constraints()
+        #plot_loss_surface('Reco_loss',log=True)
+        #plot_loss_surface('Class_loss',log=False)
         plt.close("all")
         print (f'Plots saved in {self.results_dir}')
         return None

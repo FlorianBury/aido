@@ -117,35 +117,23 @@ def train(
         reco_loss_plotter = LossPlotting()
         reco_early_stopping = EarlyStopping(patience=config.reconstruction.early_stopping)
 
-        if os.path.exists(reco_model_previous_path):
+        print ('Creating reco dataset')
+        reco_train_dataset = ReconstructionDataset(
+            targets = config.reconstruction.targets,
+            input_mf = train_mf,
+        )
+        reco_valid_dataset = ReconstructionDataset(
+            targets = config.reconstruction.targets,
+            input_mf = valid_mf,
+            means = reco_train_dataset.means,
+            stds = reco_train_dataset.stds,
+        )
+
+        if os.path.exists(reco_model_previous_path) and not config.reconstruction.retrain:
             print ('Loading reco model')
             reco_model: Reconstruction = torch.load(reco_model_previous_path,weights_only=False)
             print (reco_model)
-            print ('Creating reco dataset')
-            reco_train_dataset = ReconstructionDataset(
-                targets = config.reconstruction.targets,
-                input_mf = train_mf,
-                means = reco_model.means,
-                stds = reco_model.stds,
-            )
-            reco_valid_dataset = ReconstructionDataset(
-                targets = config.reconstruction.targets,
-                input_mf = valid_mf,
-                means = reco_model.means,
-                stds = reco_model.stds,
-            )
         else:
-            print ('Creating reco dataset')
-            reco_train_dataset = ReconstructionDataset(
-                targets = config.reconstruction.targets,
-                input_mf = train_mf,
-            )
-            reco_valid_dataset = ReconstructionDataset(
-                targets = config.reconstruction.targets,
-                input_mf = valid_mf,
-                means = reco_train_dataset.means,
-                stds = reco_train_dataset.stds,
-            )
             print ('Creating reco model')
             reco_model = Reconstruction(*reco_train_dataset.shape, reco_train_dataset.means, reco_train_dataset.stds)
             print (reco_model)
@@ -219,50 +207,30 @@ def train(
         class_loss_plotter = LossPlotting()
         class_early_stopping = EarlyStopping(patience=config.classification.early_stopping)
 
-        #class_weights = torch.tensor([1.,1.,10.,10.])
+        print ('Creating class dataset')
+        print ('Training:')
+        class_train_dataset = ClassificationDataset(
+            classes = config.classification.classes,
+            input_mf = train_mf,
+            augmentations = [
+                FlipAugmentation(),
+                RotationAugmentation(),
+                ShiftAugmentation(),
+            ],
+        )
+        print ('Validation')
+        class_valid_dataset = ClassificationDataset(
+            classes = config.classification.classes,
+            input_mf = valid_mf,
+            means = class_train_dataset.means,
+            stds = class_train_dataset.stds,
+        )
 
-
-        if os.path.exists(class_model_previous_path):
+        if os.path.exists(class_model_previous_path) and not config.classification.retrain:
             print ('Loading class model')
             class_model: Classification = torch.load(class_model_previous_path,weights_only=False)
             print (class_model)
-            print ('Creating class dataset')
-            class_train_dataset = ClassificationDataset(
-                classes = config.classification.classes,
-                input_mf = train_mf,
-                means = class_model.means,
-                stds = class_model.stds,
-                augmentations = [
-                    FlipAugmentation(),
-                    RotationAugmentation(),
-                    ShiftAugmentation(),
-                ],
-            )
-            class_valid_dataset = ClassificationDataset(
-                classes = config.classification.classes,
-                input_mf = valid_mf,
-                means = class_model.means,
-                stds = class_model.stds,
-            )
         else:
-            print ('Creating class dataset')
-            print ('Training')
-            class_train_dataset = ClassificationDataset(
-                classes = config.classification.classes,
-                input_mf = train_mf,
-                augmentations = [
-                    FlipAugmentation(),
-                    RotationAugmentation(),
-                    ShiftAugmentation(),
-                ],
-            )
-            print ('Validation')
-            class_valid_dataset = ClassificationDataset(
-                classes = config.classification.classes,
-                input_mf = valid_mf,
-                means = class_train_dataset.means,
-                stds = class_train_dataset.stds,
-            )
             print ('Creating class model')
             class_model = Classification(
                 *class_train_dataset.shape,
@@ -272,7 +240,6 @@ def train(
                 weight = config.classification.weight,
             )
             print (class_model)
-            print ('Pre-training class model')
             pre_train(
                 model = class_model,
                 train_dataset = class_train_dataset,
@@ -348,6 +315,11 @@ def train(
         output_df = pd.merge(reco_df,class_df,on=common_cols,how='outer')
         output_df.to_parquet(output_df_path)
         print (f'Saved output df to {output_df_path}')
+        os.remove(input_mf_path)
+        with open(input_mf_path, "w") as f:
+            pass
+        print (f'Removed {input_mf_path} and replaced by empty file to save space')
+
 
 
 if __name__ == "__main__":

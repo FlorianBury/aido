@@ -88,8 +88,8 @@ class Reconstruction(torch.nn.Module):
         if early_stopping is not None and early_stopping.early_stop:
             return
         print(f"Reconstruction Training: {lr=}, {batch_size=}")
-        train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
-        valid_loader = DataLoader(valid_dataset, batch_size=batch_size*10, shuffle=False)
+        train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, num_workers=20)
+        valid_loader = DataLoader(valid_dataset, batch_size=batch_size*10, shuffle=False, num_workers=20)
 
         for param_group in self.optimizer.param_groups:
             param_group['lr'] = lr

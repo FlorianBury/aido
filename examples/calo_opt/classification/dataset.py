@@ -201,11 +201,11 @@ class ClassificationDataset(Dataset):
         # Make means and stds #
         if means is None:
             self.means = [
-                self.parameters.mean(axis=0),
+                self.get_means(self.parameters),
                 [
                     np.array(
                         [
-                            inputs[:,0][inputs[:,0] > 0].mean(), # energy
+                            inputs[:,0][inputs[:,0] > 0].mean() if (inputs[:,0] > 0).sum() > 0 else 0., # energy
                             0., # bit mask
                         ],
                         dtype = np.float32,
@@ -220,11 +220,11 @@ class ClassificationDataset(Dataset):
             self.means = means
         if stds is None:
             self.stds = [
-                self.parameters.std(axis=0) + 1e-10,
+                self.get_stds(self.parameters),
                 [
                     np.array(
                         [
-                            inputs[:,0][inputs[:,0] > 0].std() + 1e-10, # energy
+                            inputs[:,0][inputs[:,0] > 0].std() + 1e-10 if (inputs[:,0] > 0).sum() > 0 else 1., # energy
                             1., # bit mask
                         ],
                         dtype = np.float32,
@@ -240,6 +240,7 @@ class ClassificationDataset(Dataset):
 
 
         # inputs standardisation is done at __getitem__ level (to allow augmentations)
+        self.parameters = (self.parameters - self.means[0]) / self.stds[0]
         self.context = (self.context - self.means[2]) / self.stds[2]
 
         self.shape = (
@@ -252,6 +253,28 @@ class ClassificationDataset(Dataset):
 #        dev = "cuda" if torch.cuda.is_available() else "cpu"
 #        self.c_means = [torch.tensor(a).to(dev) for a in self.means]
 #        self.c_stds = [torch.tensor(a).to(dev) for a in self.stds]
+
+    @staticmethod
+    def get_means(array):
+        means = np.zeros((array.shape[1],),dtype=np.float32)
+        for i in range(array.shape[1]):
+            if len(set(np.unique(array[:,i])) - set((1,0))) == 0:
+                means[i] = 0.
+            else:
+                means[i] = array[:,i].mean()
+        return means
+
+    @staticmethod
+    def get_stds(array):
+        stds = np.zeros((array.shape[1],),dtype=np.float32)
+        for i in range(array.shape[1]):
+            if len(set(np.unique(array[:,i])) - set((1,0))) == 0:
+                stds[i] = 1.
+            else:
+                stds[i] = array[:,i].std() + 1e-10
+        return stds
+
+
 
     @staticmethod
     def shower_centroids(imgs,xs,ys):

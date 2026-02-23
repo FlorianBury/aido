@@ -66,62 +66,33 @@ def training_loop(
     surrogate_df = pd.read_parquet(output_df_path)
     train_df, valid_df = train_test_split(surrogate_df, test_size=0.2,random_state=42)
 
-    if os.path.isfile(surrogate_save_path):
-        surrogate: Surrogate = torch.load(surrogate_save_path,weights_only=False)
-        surrogate_train_dataset = SurrogateDataset(
-            input_df = train_df,
-            means = surrogate.means,
-            stds = surrogate.stds,
-            reconstruction = config.surrogate.reconstruction,
-            classification = config.surrogate.classification,
-            normalize_parameters = False,
-        )
-        surrogate_valid_dataset = SurrogateDataset(
-            input_df = valid_df,
-            means = surrogate.means,
-            stds = surrogate.stds,
-            reconstruction = config.surrogate.reconstruction,
-            classification = config.surrogate.classification,
-            normalize_parameters = False,
-        )
+    print ('Creating surrogate datasets')
+    surrogate_train_dataset = SurrogateDataset(
+        input_df = train_df,
+        reconstruction = config.surrogate.reconstruction,
+        classification = config.surrogate.classification,
+        normalize_parameters = True,
+    )
+    surrogate_valid_dataset = SurrogateDataset(
+        input_df = valid_df,
+        reconstruction = config.surrogate.reconstruction,
+        classification = config.surrogate.classification,
+        normalize_parameters = True,
+        means = surrogate_train_dataset.means,
+        stds = surrogate_train_dataset.stds,
+    )
 
+
+    if os.path.isfile(surrogate_save_path):
+        print ('Surrogate already trained')
+        surrogate: Surrogate = torch.load(surrogate_save_path,weights_only=False)
     else:
-        if os.path.isfile(surrogate_previous_path):
+        if os.path.isfile(surrogate_previous_path) and not config.surrogate.retrain:
             print ('Loading surrogate')
             surrogate: Surrogate = torch.load(surrogate_previous_path,weights_only=False)
             print (surrogate)
-            surrogate_train_dataset = SurrogateDataset(
-                input_df = train_df,
-                means = surrogate.means,
-                stds = surrogate.stds,
-                reconstruction = config.surrogate.reconstruction,
-                classification = config.surrogate.classification,
-                normalize_parameters = False,
-            )
-            surrogate_valid_dataset = SurrogateDataset(
-                input_df = valid_df,
-                means = surrogate.means,
-                stds = surrogate.stds,
-                reconstruction = config.surrogate.reconstruction,
-                classification = config.surrogate.classification,
-                normalize_parameters = False,
-            )
         else:
             print ('Creating surrogate')
-            surrogate_train_dataset = SurrogateDataset(
-                input_df = train_df,
-                reconstruction = config.surrogate.reconstruction,
-                classification = config.surrogate.classification,
-                normalize_parameters = False,
-            )
-            surrogate_valid_dataset = SurrogateDataset(
-                input_df = valid_df,
-                reconstruction = config.surrogate.reconstruction,
-                classification = config.surrogate.classification,
-                normalize_parameters = False,
-                means = surrogate_train_dataset.means,
-                stds = surrogate_train_dataset.stds,
-            )
             surrogate = Surrogate(
                 *surrogate_train_dataset.shape,
                 n_time_steps = config.surrogate.n_time_steps,
@@ -206,32 +177,31 @@ def training_loop(
         stds = surrogate.stds,
         reconstruction = config.surrogate.reconstruction,
         classification = config.surrogate.classification,
-        normalize_parameters = False,
+        normalize_parameters = True,
     )
 
     optimizer_lr = config.optimizer.lr * config.optimizer.gamma ** iteration
-    if iteration >= config.optimizer.iteration_start_reco:
-        alpha_reco = config.optimizer.alpha_reco
-    else:
-        alpha_reco = 0.
-    if iteration >= config.optimizer.iteration_start_class:
-        alpha_class = config.optimizer.alpha_class
-    else:
-        alpha_class = 0.
+
+    def sigmoid_turn_on(x,yi,yf,k,T):
+        return yi + (yf-yi) * 1 / (1+np.exp(-k*(x-T)))
+
+    alpha_reco = sigmoid_turn_on(iteration,*config.optimizer.turn_on_reco)
+    alpha_class = sigmoid_turn_on(iteration,*config.optimizer.turn_on_class)
 
     updated_parameter_dict, is_optimal = optimizer.optimize(
         surrogate_model = surrogate,
         dataset = surrogate_dataset,
+        scale = config.optimizer.scale,
         batch_size = config.optimizer.batch_size,
         n_epochs = config.optimizer.n_epochs,
+        lr = optimizer_lr,
+        end_factor = config.optimizer.end_factor,
         alpha_reco = alpha_reco,
         alpha_class = alpha_class,
         reconstruction_loss = reconstruction_loss_function,
         classification_loss = classification_loss_function,
         additional_constraints = constraints,
         parameter_optimizer_savepath = parameter_optimizer_savepath,
-        lr = optimizer_lr,
-        end_factor = config.optimizer.end_factor,
     )
     if not is_optimal:
         raise RuntimeError

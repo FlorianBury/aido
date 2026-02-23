@@ -204,6 +204,8 @@ class Classification(nn.Module):
     def loss(y: torch.Tensor, y_pred: torch.Tensor, multiclass: bool, weight: torch.Tensor = None) -> torch.Tensor:
         assert y_pred.shape == y.shape, f'y has shape {y.shape}, but y_pred has shape {y_pred.shape}'
         if weight is not None:
+            if weight.ndim == 0:
+                weight = weight.reshape(-1)
             assert len(weight) == y_pred.shape[1]
         if multiclass:
             loss = nn.CrossEntropyLoss(reduction='none',weight=weight.to(y_pred.device))(y_pred,y)
@@ -229,8 +231,8 @@ class Classification(nn.Module):
             return
         print(f"Classification Training: {lr=}, {batch_size=}")
         print (f"Multiclass {self.multiclass}")
-        train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
-        valid_loader = DataLoader(valid_dataset, batch_size=batch_size*10, shuffle=False)
+        train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, num_workers=20)
+        valid_loader = DataLoader(valid_dataset, batch_size=batch_size*10, shuffle=False, num_workers=20)
 
         for param_group in self.optimizer.param_groups:
             param_group['lr'] = lr

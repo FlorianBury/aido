@@ -129,7 +129,7 @@ class SurrogateDataset(Dataset):
         )
         if means is None:
             self.means: List[np.float32] = [
-                self.parameters.mean(axis=0),
+                self.get_means(self.parameters),
                 self.context.mean(axis=0),
                 self.targets.mean(axis=0),
                 np.zeros(self.classes.shape[1],dtype=self.classes.dtype),
@@ -140,7 +140,7 @@ class SurrogateDataset(Dataset):
 
         if stds is None:
             self.stds: List[np.float32] = [
-                self.parameters.std(axis=0) + 1e-10,
+                self.get_stds(self.parameters),
                 self.context.std(axis=0) + 1e-10,
                 self.targets.std(axis=0) + 1e-10,
                 np.ones(self.classes.shape[1],dtype=self.classes.dtype),
@@ -162,6 +162,25 @@ class SurrogateDataset(Dataset):
         self.reconstructed = self.normalize_features(self.reconstructed, index=4)
         self.df = self.filter_infs_and_nans(self.df)
 
+    @staticmethod
+    def get_means(array):
+        means = np.zeros((array.shape[1],),dtype=np.float32)
+        for i in range(array.shape[1]):
+            if len(set(np.unique(array[:,i])) - set((1,0))) == 0:
+                means[i] = 0.
+            else:
+                means[i] = array[:,i].mean()
+        return means
+
+    @staticmethod
+    def get_stds(array):
+        stds = np.zeros((array.shape[1],),dtype=np.float32)
+        for i in range(array.shape[1]):
+            if len(set(np.unique(array[:,i])) - set((1,0))) == 0:
+                stds[i] = 1.
+            else:
+                stds[i] = array[:,i].std() + 1e-10
+        return stds
     def filter_infs_and_nans(self, df: pd.DataFrame) -> pd.DataFrame:
         '''Removes all events that contain infs or nans.
         '''

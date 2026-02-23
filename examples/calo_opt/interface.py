@@ -4,7 +4,6 @@ import json
 from typing import Dict, Iterable, List
 
 import pandas as pd
-import dask.dataframe as dd
 import torch
 from calo_opt.reconstruction.model import Reconstruction
 from calo_opt.classification.model import Classification

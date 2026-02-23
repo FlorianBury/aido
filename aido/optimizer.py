@@ -137,6 +137,7 @@ class Optimizer(torch.nn.Module):
             additional_constraints: None | Callable[[SimulationParameterDictionary, Dict], torch.Tensor] = None,
             parameter_optimizer_savepath: str | os.PathLike | None = None,
             device: str | None = None,
+            scale: float = 0.8,
             lr: float = 0.01,
             end_factor: float = None,
     ) -> Tuple[SimulationParameterDictionary, bool]:
@@ -186,6 +187,8 @@ class Optimizer(torch.nn.Module):
                 targets: torch.Tensor = targets.to(self.device)
                 classes : torch.Tensor = classes.to(self.device)
                 parameters_batch: torch.Tensor = self.parameter_module()
+                if dataset.normalize_parameters:
+                    parameters_batch = dataset.normalize_features(parameters_batch,index=0)
 
                 surrogate_output = dataset.unnormalize_features(
                     self.surrogate_model.sample_forward(
@@ -239,7 +242,7 @@ class Optimizer(torch.nn.Module):
 
                 self.parameter_dict.update_current_values(self.parameter_module.physical_values(format="dict"))
                 self.parameter_dict.update_probabilities(self.parameter_module.probabilities)
-                self.save_parameters(epoch, batch_idx, surrogate_loss_detached, parameter_optimizer_savepath)
+                #self.save_parameters(epoch, batch_idx, surrogate_loss_detached, parameter_optimizer_savepath)
 
                 epoch_tot_loss += loss.item()
                 epoch_surrogate_loss += surrogate_loss_detached
@@ -252,8 +255,8 @@ class Optimizer(torch.nn.Module):
 
 
                 if not self.check_parameters_are_local(
-                    updated_parameters=self.parameter_module.continuous_tensors(),
-                    scale=0.8
+                    updated_parameters = self.parameter_module.continuous_tensors(),
+                    scale = scale,
                 ):
                     stop_epoch = True
                     logger.error("Optimizer: Parameters are not local")
@@ -270,7 +273,7 @@ class Optimizer(torch.nn.Module):
 
             logger.info(
                 f"Optimizer Epoch: {epoch:3d} LR = {current_lr:.5f} Loss: {epoch_surrogate_loss:.5f} (surrogate)\t"
-                + f"[= {alpha_reco} * {epoch_reco_loss:.5f} (reco) + {alpha_class} * {epoch_class_loss:.5f} (class)]\t"
+                + f"[= {alpha_reco:.5f} * {epoch_reco_loss:.5f} (reco) + {alpha_class:.5f} * {epoch_class_loss:.5f} (class)]\t"
                 + f"+ {epoch_constraints_loss:.5f} (constraints)\t"
                 + f"+ {epoch_boundaries_loss:.5f} (boundaries)\t"
                 + f"= {epoch_tot_loss:.5f} (total)"

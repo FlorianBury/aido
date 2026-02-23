@@ -4,9 +4,10 @@ from typing import Any, Dict, List, Tuple
 
 @dataclass
 class ReconstructionConfig:
+    retrain: bool = True
     n_epochs_pre: int = 50
     n_epochs_main: int = 50
-    batch_size: int = 1024
+    batch_size: int = 512
     early_stopping: int = 50
     lr_pre: float  = 1e-2
     lr_main: Tuple[float] = (5e-3, 1e-3, 5e-4)
@@ -16,20 +17,21 @@ class ReconstructionConfig:
 
 @dataclass
 class ClassificationConfig:
-    n_epochs_pre: int = 25
-    n_epochs_main: int = 25
-    batch_size: int = 1024
-    early_stopping: int = 25
+    retrain: bool = True
+    n_epochs_pre: int = 20
+    n_epochs_main: int = 20
+    batch_size: int = 512
+    early_stopping: int = 20
     lr_pre: float  = 1e-3
     lr_main: Tuple[float] = (5e-4, 1e-4, 5e-5)
     classes: Tuple[str] = (
         'contains:e+',
-        'contains:gamma',
-        'contains:pi+',
-        'contains:proton',
+        #'contains:gamma',
+        #'contains:pi+',
+        #'contains:proton',
     )
-    multiclass: bool = True
-    weight: Tuple[float] = (1.,1.,5.,5.)
+    multiclass: bool = False
+    weight: Tuple[float] = (1.,)
 
 @dataclass
 class CaloConfig:
