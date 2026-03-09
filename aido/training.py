@@ -84,12 +84,26 @@ def training_loop(
 
 
     if os.path.isfile(surrogate_save_path):
-        print ('Surrogate already trained')
+        print (f'Surrogate already trained, loading from {surrogate_save_path}')
         surrogate: Surrogate = torch.load(surrogate_save_path,weights_only=False)
     else:
         if os.path.isfile(surrogate_previous_path) and not config.surrogate.retrain:
-            print ('Loading surrogate')
+            print (f'Loading surrogate from {surrogate_previous_path}')
             surrogate: Surrogate = torch.load(surrogate_previous_path,weights_only=False)
+            surrogate_train_dataset.update(
+                initial_means = surrogate.means,
+                initial_stds = surrogate.stds,
+                momentum = config.surrogate.momentum,
+            )
+            surrogate_valid_dataset.update(
+                initial_means = surrogate_train_dataset.means,
+                initial_stds = surrogate_train_dataset.stds,
+                momentum = 0.,
+            )
+            surrogate.means = surrogate_train_dataset.means
+            surrogate.stds = surrogate_train_dataset.stds
+            surrogate_train_dataset.preprocess()
+            surrogate_valid_dataset.preprocess()
             print (surrogate)
         else:
             print ('Creating surrogate')
@@ -100,6 +114,8 @@ def training_loop(
                 initial_means = surrogate_train_dataset.means,
                 initial_stds = surrogate_train_dataset.stds,
             )
+            surrogate_train_dataset.preprocess()
+            surrogate_valid_dataset.preprocess()
             print (surrogate)
             pre_train(
                 surrogate,
@@ -179,6 +195,7 @@ def training_loop(
         classification = config.surrogate.classification,
         normalize_parameters = True,
     )
+    surrogate_dataset.preprocess()
 
     optimizer_lr = config.optimizer.lr * config.optimizer.gamma ** iteration
 

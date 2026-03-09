@@ -104,6 +104,7 @@ class SurrogateDataset(Dataset):
         self.classification = classification
         self.parameters = self.df[parameter_key].to_numpy(np.float32)
         self.normalize_parameters = normalize_parameters
+        self.eps = 1e-9
 
         if context_key in self.df.columns:
             self.context = self.df[context_key].to_numpy(np.float32)
@@ -141,26 +142,37 @@ class SurrogateDataset(Dataset):
         if stds is None:
             self.stds: List[np.float32] = [
                 self.get_stds(self.parameters),
-                self.context.std(axis=0) + 1e-10,
-                self.targets.std(axis=0) + 1e-10,
+                self.context.std(axis=0),
+                self.targets.std(axis=0),
                 np.ones(self.classes.shape[1],dtype=self.classes.dtype),
-                self.reconstructed.std(axis=0) + 1e-10,
+                self.reconstructed.std(axis=0),
             ]
         else:
             self.stds = stds
 
+
+        self.df = self.filter_infs_and_nans(self.df)
+
+    def _record(self):
+        device = "cuda" if torch.cuda.is_available() else "cpu"
         self.c_means = [torch.tensor(a).to(device) for a in self.means]
         self.c_stds = [torch.tensor(a).to(device) for a in self.stds]
 
+    def preprocess(self):
         if self.normalize_parameters:
             logger.info("Normalized parameters")
             self.parameters = self.normalize_features(self.parameters, index=0)
-
         self.context = self.normalize_features(self.context, index=1)
         self.targets = self.normalize_features(self.targets, index=2)
         self.classes = self.normalize_features(self.classes, index=3)
         self.reconstructed = self.normalize_features(self.reconstructed, index=4)
-        self.df = self.filter_infs_and_nans(self.df)
+        self._record()
+
+    def update(self,initial_means,initial_stds,momentum):
+        for i in range(len(self.means)):
+            self.means[i] = (1 - momentum) * initial_means[i] + momentum * self.means[i]
+        for i in range(len(self.stds)):
+            self.stds[i] = (1 - momentum) * initial_stds[i] + momentum * self.stds[i]
 
     @staticmethod
     def get_means(array):
@@ -179,7 +191,7 @@ class SurrogateDataset(Dataset):
             if len(set(np.unique(array[:,i])) - set((1,0))) == 0:
                 stds[i] = 1.
             else:
-                stds[i] = array[:,i].std() + 1e-10
+                stds[i] = array[:,i].std()
         return stds
     def filter_infs_and_nans(self, df: pd.DataFrame) -> pd.DataFrame:
         '''Removes all events that contain infs or nans.
@@ -239,9 +251,9 @@ class SurrogateDataset(Dataset):
             The normalized feature.
         """
         if isinstance(target, torch.Tensor):
-            return (target - self.c_means[index]) / self.c_stds[index]
+            return (target - self.c_means[index]) / (self.c_stds[index]+self.eps)
         elif isinstance(target, np.ndarray):
-            return (target - self.means[index]) / self.stds[index]
+            return (target - self.means[index]) / (self.stds[index]+self.eps)
 
     def __getitem__(self, idx: int):
         return self.parameters[idx], self.context[idx], self.targets[idx], self.classes[idx], self.reconstructed[idx]

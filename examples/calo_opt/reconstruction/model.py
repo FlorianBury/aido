@@ -49,7 +49,6 @@ class Reconstruction(torch.nn.Module):
         self.optimizer = torch.optim.Adam(self.parameters(), lr=0.0001, weight_decay=1e-4)
         self.device = torch.device(device)
 
-
     def forward(self, parameters, x, c) -> torch.Tensor:
         """ Concatenate the detector parameters and the input
         """

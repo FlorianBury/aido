@@ -130,12 +130,32 @@ def train(
         )
 
         if os.path.exists(reco_model_previous_path) and not config.reconstruction.retrain:
-            print ('Loading reco model')
+            print (f'Loading reco model from {reco_model_previous_path}')
             reco_model: Reconstruction = torch.load(reco_model_previous_path,weights_only=False)
+            reco_train_dataset.update(
+                initial_means = reco_model.means,
+                initial_stds = reco_model.stds,
+                momentum = config.reconstruction.momentum,
+            )
+            reco_valid_dataset.update(
+                initial_means = reco_train_dataset.means,
+                initial_stds = reco_train_dataset.stds,
+                momentum = 0.,
+            )
+            reco_model.means = reco_train_dataset.means
+            reco_model.stds = reco_train_dataset.stds
+            reco_train_dataset.preprocess()
+            reco_valid_dataset.preprocess()
             print (reco_model)
         else:
             print ('Creating reco model')
-            reco_model = Reconstruction(*reco_train_dataset.shape, reco_train_dataset.means, reco_train_dataset.stds)
+            reco_model = Reconstruction(
+                *reco_train_dataset.shape,
+                initial_means = reco_train_dataset.means,
+                initial_stds = reco_train_dataset.stds,
+            )
+            reco_train_dataset.preprocess()
+            reco_valid_dataset.preprocess()
             print (reco_model)
             print ('Pre-training reco model')
             pre_train(
@@ -227,8 +247,22 @@ def train(
         )
 
         if os.path.exists(class_model_previous_path) and not config.classification.retrain:
-            print ('Loading class model')
+            print (f'Loading class model from {class_model_previous_path}')
             class_model: Classification = torch.load(class_model_previous_path,weights_only=False)
+            class_train_dataset.update(
+                initial_means = class_model.means,
+                initial_stds = class_model.stds,
+                momentum = config.classification.momentum,
+            )
+            class_valid_dataset.update(
+                initial_means = class_train_dataset.means,
+                initial_stds = class_train_dataset.stds,
+                momentum = 0.,
+            )
+            class_model.means = class_train_dataset.means
+            class_model.stds = class_train_dataset.stds
+            class_train_dataset.preprocess()
+            class_valid_dataset.preprocess()
             print (class_model)
         else:
             print ('Creating class model')
@@ -239,7 +273,10 @@ def train(
                 multiclass = config.classification.multiclass,
                 weight = config.classification.weight,
             )
+            class_train_dataset.preprocess()
+            class_valid_dataset.preprocess()
             print (class_model)
+            print ('Pre-training class model')
             pre_train(
                 model = class_model,
                 train_dataset = class_train_dataset,

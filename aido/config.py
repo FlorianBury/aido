@@ -14,11 +14,12 @@ class OptimizerConfig:
     batch_size: int = 512                   # optimizer batch size
     n_epochs: int = 50                      # max number of epochs (per iteration)
     turn_on_reco: Tuple = (1.,1.,1.,50)     # sigmoid annealing parameters (lambda_start, lambda_end, k, T) with
-    turn_on_class: Tuple = (0.,1,1.,100)    # sigmoid(t) = (1+np.exp(-k*(x-T))) (T=half-value, k=sharpness)
+    turn_on_class: Tuple = (2.,2.,1.,100)   # sigmoid(t) = (1+np.exp(-k*(x-T))) (T=half-value, k=sharpness)
 
 @dataclass
 class SurrogateConfig:
-    retrain: bool = True
+    retrain: bool = False
+    momentum: float = 0.1
     n_epoch_pre: int = 50
     n_epochs_main: int = 50
     batch_size: int = 512

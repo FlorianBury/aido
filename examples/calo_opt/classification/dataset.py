@@ -76,6 +76,7 @@ class ClassificationDataset(Dataset):
         self.mf = input_mf
         self.mf = self.filter_infs_and_nans(self.mf)
         self.mf = self.filter_empty_events(self.mf)
+        self.eps = 1e-9
 
         self.parameters = np.concatenate(
             [
@@ -224,7 +225,7 @@ class ClassificationDataset(Dataset):
                 [
                     np.array(
                         [
-                            inputs[:,0][inputs[:,0] > 0].std() + 1e-10 if (inputs[:,0] > 0).sum() > 0 else 1., # energy
+                            inputs[:,0][inputs[:,0] > 0].std() if (inputs[:,0] > 0).sum() > 0 else 1., # energy
                             1., # bit mask
                         ],
                         dtype = np.float32,
@@ -233,15 +234,11 @@ class ClassificationDataset(Dataset):
                     else inputs.mean(axis=0)
                     for inputs in self.inputs
                 ],
-                self.context.std(axis=0) + 1e-10,
+                self.context.std(axis=0),
             ]
         else:
             self.stds = stds
 
-
-        # inputs standardisation is done at __getitem__ level (to allow augmentations)
-        self.parameters = (self.parameters - self.means[0]) / self.stds[0]
-        self.context = (self.context - self.means[2]) / self.stds[2]
 
         self.shape = (
             self.parameters.shape[1],
@@ -253,6 +250,22 @@ class ClassificationDataset(Dataset):
 #        dev = "cuda" if torch.cuda.is_available() else "cpu"
 #        self.c_means = [torch.tensor(a).to(dev) for a in self.means]
 #        self.c_stds = [torch.tensor(a).to(dev) for a in self.stds]
+
+    def preprocess(self):
+        # inputs standardisation is done at __getitem__ level (to allow augmentations)
+        self.parameters = (self.parameters - self.means[0]) / (self.stds[0]+self.eps)
+        self.context = (self.context - self.means[2]) / (self.stds[2]+self.eps)
+
+    def update(self,initial_means,initial_stds,momentum):
+        self.means[0] = (1 - momentum) * initial_means[0] + momentum * self.means[0]
+        self.stds[0]  = (1 - momentum) * initial_stds[0] + momentum * self.stds[0]
+        self.means[2] = (1 - momentum) * initial_means[2] + momentum * self.means[2]
+        self.stds[2]  = (1 - momentum) * initial_stds[2] + momentum * self.stds[2]
+
+        for i in range(len(self.means[1])):
+            self.means[1][i] =  (1 - momentum) * initial_means[1][i] + momentum * self.means[1][i]
+        for i in range(len(self.stds[1])):
+            self.stds[1][i] =  (1 - momentum) * initial_stds[1][i] + momentum * self.stds[1][i]
 
     @staticmethod
     def get_means(array):
@@ -377,14 +390,14 @@ class ClassificationDataset(Dataset):
 
     def normalize_img(self,img,means,stds):
         assert img.ndim == 3
-        out = (img- means.reshape(-1,1,1)) / stds.reshape(-1,1,1)
+        out = (img- means.reshape(-1,1,1)) / (stds.reshape(-1,1,1)+self.eps)
         return out
 
     def __getitem__(self, idx: int):
         imgs = [inputs[idx] for inputs in self.inputs]
 
-        for augmentaton in self.augmentations:
-            imgs = augmentaton(imgs)
+        for augmentation in self.augmentations:
+            imgs = augmentation(imgs)
 
         imgs = [
             self.normalize_img(img,self.means[1][i],self.stds[1][i])

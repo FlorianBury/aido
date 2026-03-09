@@ -30,6 +30,7 @@ class ReconstructionDataset(Dataset):
         self.mf = input_mf
         self.mf = self.filter_infs_and_nans(self.mf)
         self.mf = self.filter_empty_events(self.mf)
+        self.eps = 1e-9
 
         self.parameters = np.concatenate(
             [
@@ -100,21 +101,31 @@ class ReconstructionDataset(Dataset):
         if stds is None:
             self.stds = [
                 self.get_stds(self.parameters),
-                self.inputs.std(axis=0) + 1e-10,
-                self.targets.std(axis=0) + 1e-10,
-                self.context.std(axis=0) + 1e-10,
+                self.inputs.std(axis=0),
+                self.targets.std(axis=0),
+                self.context.std(axis=0),
             ]
         else:
             self.stds = stds
 
-        self.parameters = (self.parameters - self.means[0]) / self.stds[0]
-        self.inputs = (self.inputs - self.means[1]) / self.stds[1]
-        self.targets = (self.targets - self.means[2]) / self.stds[2]
-        self.context = (self.context - self.means[3]) / self.stds[3]
-
+    def _record(self):
         dev = "cuda" if torch.cuda.is_available() else "cpu"
         self.c_means = [torch.tensor(a).to(dev) for a in self.means]
         self.c_stds = [torch.tensor(a).to(dev) for a in self.stds]
+
+    def preprocess(self):
+        self.parameters = (self.parameters - self.means[0]) / (self.stds[0] + self.eps)
+        self.inputs = (self.inputs - self.means[1]) / (self.stds[1] + self.eps)
+        self.targets = (self.targets - self.means[2]) / (self.stds[2] + self.eps)
+        self.context = (self.context - self.means[3]) / (self.stds[3] + self.eps)
+        self._record()
+
+    def update(self,initial_means,initial_stds,momentum):
+        for i in range(len(self.means)):
+            self.means[i] = (1 - momentum) * initial_means[i] + momentum * self.means[i]
+        for i in range(len(self.stds)):
+            self.stds[i] = (1 - momentum) * initial_stds[i] + momentum * self.stds[i]
+        self._record()
 
     @staticmethod
     def get_means(array):
@@ -133,7 +144,7 @@ class ReconstructionDataset(Dataset):
             if len(set(np.unique(array[:,i])) - set((1,0))) == 0:
                 stds[i] = 1.
             else:
-                stds[i] = array[:,i].std() + 1e-10
+                stds[i] = array[:,i].std()
         return stds
 
     def filter_infs_and_nans(self, mf):
