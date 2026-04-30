@@ -1,4 +1,5 @@
 import json
+import math
 import os
 import sys
 import random
@@ -182,7 +183,8 @@ class Simulation():
         for _ in tqdm(range(self.n_events),desc='Stitching events',leave=False):
             N = min(20,max(1,np.random.poisson(self.mean_poisson)))
             min_dist = -1.
-            while min_dist < self.min_dist:
+            n_hits = 0
+            while min_dist < self.min_dist or n_hits == 0:
                 indices = np.random.choice(len(mf), size=N, replace=False)
                 mfs_to_stich = [
                     MiniFrame(
@@ -193,13 +195,14 @@ class Simulation():
                     )
                     for idx in indices
                 ]
-                if N == 1:
-                    break
-                distances = self.get_distances(mfs_to_stich)
-                min_dist = distances.min()
-                if min_dist > self.min_dist:
-                    N = max(1,N-1)
-            events.append(self.stitch_one_event(mfs_to_stich))
+                if N ==1:
+                    min_dist = math.inf
+                else:
+                    distances = self.get_distances(mfs_to_stich)
+                    min_dist = distances.min()
+                event = self.stitch_one_event(mfs_to_stich)
+                n_hits = event['hits']['pos'].shape[0]
+            events.append(event)
 
         return CaloGraphDataset.from_data_list(events)
 

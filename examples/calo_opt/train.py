@@ -55,6 +55,17 @@ from timing import Timer
 #
 #    model.to('cpu')
 
+class Annealing:
+    def __init__(self,midpoint,sharpness):
+        self.midpoint = midpoint
+        self.sharpness = sharpness
+        self.epoch = 0
+
+    def __call__(self):
+        return torch.sigmoid(torch.tensor((self.epoch - self.midpoint) / self.sharpness))
+
+    def new_epoch(self):
+        self.epoch += 1
 
 def train(
     config_path: Union[str, os.PathLike],
@@ -74,56 +85,58 @@ def train(
     )
     print (f'Train dataset : {len(train_dataset)} / Validation dataset : {len(valid_dataset)}')
     model_previous_path = os.path.join(results_dir, "models", f"graph_{iteration-1}.pt")
+    model_current_path = os.path.join(results_dir, "models", f"graph_{iteration}.pt")
 
     loss_plotter = LossPlotting()
 
-    if os.path.exists(model_previous_path) and not config.graph.retrain:
+    if os.path.exists(model_current_path):
         print ('Loading graph model')
-        model = torch.load(model_previous_path,weights_only=False)
+        model = torch.load(model_current_path,weights_only=False)
+        model.set_to_device(config.graph.device)
     else:
-        print ('Creating graph model')
-        model = GravNetModel(
-            inputs = config.graph.inputs,
-            regression = config.graph.regression,
-            classification = config.graph.classification,
-            loss_factors = config.graph.loss_factors,
-            shapes = simulation_dataset.get_shapes(),
-            means = simulation_dataset.get_means(),
-            stds = simulation_dataset.get_stds(),
-        )
+        if os.path.exists(model_previous_path) and not config.graph.retrain:
+            print ('Loading previous graph model')
+            model = torch.load(model_previous_path,weights_only=False)
+            pretrain = False
+            print ( model.stds['global_params'].values)
+            model.means['global_params'].values = torch.nn.Parameter(simulation_dataset.get_means()['global_params'], requires_grad=False)
+            model.stds['global_params'].values = torch.nn.Parameter(simulation_dataset.get_stds()['global_params'], requires_grad=False)
+            print ( model.stds['global_params'].values)
+        else:
+            print ('Creating graph model')
+            model = GravNetModel(
+                inputs = config.graph.inputs,
+                regression = config.graph.regression,
+                classification = config.graph.classification,
+                loss_factors = config.graph.loss_factors,
+                shapes = simulation_dataset.get_shapes(),
+                means = simulation_dataset.get_means(),
+                stds = simulation_dataset.get_stds(),
+            )
+            pretrain = True
         print (model)
-        print ('Train reco model')
-        model.to("cuda" if torch.cuda.is_available() else "cpu")
-        model.train_model(
-            train_dataset,
-            valid_dataset,
-            n_epochs = config.graph.n_epochs,
-            batch_size = config.graph.batch_size,
-            lr = config.graph.lr,
-            annealing = config.graph.annealing,
-            plotter = loss_plotter,
-            #early_stopping = reco_early_stopping,
-        )
-        model.train_model(
-            train_dataset,
-            valid_dataset,
-            n_epochs = 10,
-            batch_size = config.graph.batch_size,
-            lr = config.graph.lr / 10,
-            plotter = loss_plotter,
-            #early_stopping = reco_early_stopping,
-        )
-        model.train_model(
-            train_dataset,
-            valid_dataset,
-            n_epochs = 10,
-            batch_size = config.graph.batch_size,
-            lr = config.graph.lr / 100,
-            plotter = loss_plotter,
-            #early_stopping = reco_early_stopping,
-        )
+        print ('Train graph model')
+        model.set_to_device(config.graph.device)
 
-        torch.save(model,model_previous_path)
+        annealing = Annealing(*config.graph.annealing)
+        for i in range(len(config.graph.n_epochs)):
+            if not pretrain and config.graph.pretrain[i]:
+                annealing.epoch += config.graph.n_epochs[i]
+                continue
+            model.train_model(
+                train_dataset,
+                valid_dataset,
+                n_epochs = config.graph.n_epochs[i],
+                n_batches = config.graph.n_batches[i],
+                batch_size = config.graph.batch_sizes[i],
+                lr = config.graph.lrs[i],
+                annealing = annealing,
+                plotter = loss_plotter,
+                #early_stopping = reco_early_stopping,
+            )
+
+        torch.save(model,model_current_path)
+        print (f'Model saved to {model_current_path}')
 
         loss_plotter.plot(
             os.path.join(
@@ -138,7 +151,7 @@ def train(
 
     train_dataset,t_dist = model.inference(
         dataset = train_dataset,
-        batch_size = 200,
+        batch_size = 256,
         t_beta = config.graph.t_beta,
         t_dist = config.graph.t_dist,
     )
@@ -155,7 +168,7 @@ def train(
     )
     valid_dataset,_ = model.inference(
         dataset = valid_dataset,
-        batch_size = 200,
+        batch_size = 256,
         t_beta = config.graph.t_beta,
         t_dist = t_dist,
     )
@@ -177,6 +190,7 @@ def train(
         timer = Timer(
             model,
             runs = config.timing.runs,
+            device = config.timing.device,
         )
         output_dataset = timer(output_dataset)
 
@@ -188,7 +202,7 @@ def train(
     for i in range(20):
         output_dataset.plot(
             idx = i,
-            path = os.path.join(
+            savepath = os.path.join(
                 os.path.dirname(output_graph_path),
                 f'event_{i}.png'
             ),

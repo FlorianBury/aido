@@ -119,7 +119,7 @@ class CaloGraphDataset(InMemoryDataset):
             stds['global_params'] = self.get_input_std(data.global_params)
         return stds
 
-    def plot(self,idx,path):
+    def plot(self,idx,savepath=None,show=False):
         data = self[idx]
 
         types = torch.arange(data['particles'].id.shape[1])
@@ -174,23 +174,56 @@ class CaloGraphDataset(InMemoryDataset):
             E_dep = data['hits'].E
             if 'predictions' in data.node_types:
                 beta = data['predictions'].beta[mask]
+            else:
+                beta = None
             if 'vertices' in data.node_types:
                 vert_pos = data['hits'].pos[data['vertices'].idx]
                 vert_pos = vert_pos[vert_pos[:,2] == z_pos[i]]
+            else:
+                vert_pos = None
 
             # Get axes #
             assert cell[0] == cell[1]
             bins = make_bins(
-                float(data['hits'].pos[:,:2].min()),
-                float(data['hits'].pos[:,:2].max()),
+                min(
+                    float(pos[:,:2].min()),
+                    - float(pos[:,:2].max()),
+                ),
+                max(
+                    - float(pos[:,:2].min()),
+                    + float(pos[:,:2].max()),
+                ),
                 float(cell[0]),
             )
+
+            # Expand if true particles outside the range or other layers go wider #
+            min_part_pos = min(
+                data['particles'].pos.min(),
+                (data['hits'].pos[:,:2].min() - data['hits'].cell[:,:2]/2).min(),
+            )
+            max_part_pos = max(
+                data['particles'].pos.max(),
+                (data['hits'].pos[:,:2].max() + data['hits'].cell[:,:2]/2).max(),
+            )
+            if min_part_pos < bins[0] or max_part_pos > bins[-1]:
+                add_dist = max(
+                    max_part_pos - bins[-1],
+                    bins[0] - min_part_pos,
+                )
+                add_bins = round(float(add_dist) / float(cell[0]))
+                bins = np.concatenate(
+                    [
+                        bins[0] - float(cell[0]) * np.arange(add_bins, 0, -1),
+                        bins,
+                        bins[-1] + float(cell[0]) * np.arange(1, add_bins + 1),
+                    ]
+                )
 
             # Fill with label #
             img = np.ones((len(bins)-1,len(bins)-1)) * -1
             for (x,y,z),l in zip(pos,labels):
-                ix = np.digitize(x,bins) - 1
-                iy = np.digitize(y,bins) - 1
+                ix = max(0,min(len(bins)-1,np.digitize(x,bins))) - 1
+                iy = max(0,min(len(bins)-1,np.digitize(y,bins))) - 1
                 img[iy,ix] = l
             masked_img = np.ma.masked_equal(img, -1)
 
@@ -204,8 +237,6 @@ class CaloGraphDataset(InMemoryDataset):
                 extent = [bins[0],bins[-1],bins[0],bins[-1]],
                 vmin = 0,
             )
-            #cbar = fig.colorbar(im, ax=axs[0,i], ticks=np.arange(img.max() + 1), shrink=0.7)
-            #cbar.set_label('Label')
 
             # Add true particle locations #
             colors = cmap(np.arange(data['particles'].num_nodes))
@@ -244,8 +275,8 @@ class CaloGraphDataset(InMemoryDataset):
             img_type = np.ones((len(bins)-1,len(bins)-1)) * -1
             img_E = np.zeros((len(bins)-1,len(bins)-1))
             for (x,y,z),l,E in zip(pos,labels,E_dep):
-                ix = np.digitize(x,bins) - 1
-                iy = np.digitize(y,bins) - 1
+                ix = max(0,min(len(bins)-1,np.digitize(x,bins))) - 1
+                iy = max(0,min(len(bins)-1,np.digitize(y,bins))) - 1
                 img_type[iy,ix] = data['particles'].id[l].argmax(dim=-1)
                 img_E[iy,ix] = E
 
@@ -272,16 +303,15 @@ class CaloGraphDataset(InMemoryDataset):
                 extent = [bins[0],bins[-1],bins[0],bins[-1]],
             )
             for typ in types:
-                if 'pos' in data['vertices'].keys():
-                    axs[1,i].scatter(
-                        data['particles'].pos[data['particles'].id.argmax(dim=-1)==typ,0],
-                        data['particles'].pos[data['particles'].id.argmax(dim=-1)==typ,1],
-                        color = type_colors[int(typ)][:3],
-                        edgecolor = 'black',
-                        linewidths=1,
-                        marker = 'X',
-                        s = 100,
-                    )
+                axs[1,i].scatter(
+                    data['particles'].pos[data['particles'].id.argmax(dim=-1)==typ,0],
+                    data['particles'].pos[data['particles'].id.argmax(dim=-1)==typ,1],
+                    color = type_colors[int(typ)][:3],
+                    edgecolor = 'black',
+                    linewidths=1,
+                    marker = 'X',
+                    s = 100,
+                )
             if 'vertices' in data.node_types:
                 if 'pos' in data['vertices'].keys() and 'id' in data['vertices'].keys():
                     for typ in types:
@@ -308,8 +338,8 @@ class CaloGraphDataset(InMemoryDataset):
             if 'predictions' in data.node_types:
                 img_beta = np.ones((len(bins)-1,len(bins)-1)) * -1
                 for (x,y,z),b in zip(pos,beta):
-                    ix = np.digitize(x,bins) - 1
-                    iy = np.digitize(y,bins) - 1
+                    ix = max(0,min(len(bins)-1,np.digitize(x,bins))) - 1
+                    iy = max(0,min(len(bins)-1,np.digitize(y,bins))) - 1
                     img_beta[iy,ix] = b
                 im = axs[2,i].imshow(
                     img_beta,
@@ -331,16 +361,15 @@ class CaloGraphDataset(InMemoryDataset):
                         s = 100,
                     )
 
-
-
-
-            # Axis labels #
+            # Axis esthetics #
             axs[0,i].set_xlabel('x [cm]')
             axs[1,i].set_xlabel('x [cm]')
             axs[0,i].set_ylabel('y [cm]')
             axs[1,i].set_ylabel('y [cm]')
             axs[0,i].set_title(f'Layer {i} (z = {z_pos[i]:.3f} cm)')
             axs[1,i].set_title(f'Layer {i} (z = {z_pos[i]:.3f} cm)')
+            axs[0,i].set_aspect('equal', adjustable='box')
+            axs[1,i].set_aspect('equal', adjustable='box')
 
 
         # Add markers #
@@ -374,7 +403,7 @@ class CaloGraphDataset(InMemoryDataset):
                 s = 100,
                 label = 'Condensation point',
             )
-        axs[0,-1].legend(loc='center left',fontsize=16)
+        axs[0,-1].legend(loc='center left',fontsize=16,frameon=False)
 
         # Now add colorbar to the last axis #
         axs[1,-1].cla()
@@ -394,9 +423,9 @@ class CaloGraphDataset(InMemoryDataset):
             x0 += width_fraction * 4
 
         # Add beta colorbar #
-        axs[2,-1].cla()
-        axs[2,-1].set_axis_off()
         if 'predictions' in data.node_types:
+            axs[2,-1].cla()
+            axs[2,-1].set_axis_off()
             cmap = plt.cm.Blues
             norm = matplotlib.colors.Normalize(vmin=0,vmax=1)
             sm = ScalarMappable(norm=norm, cmap=cmap)
@@ -406,7 +435,11 @@ class CaloGraphDataset(InMemoryDataset):
             cb = fig.colorbar(sm, cax=cax)
             cb.set_label(r"$\beta$ (condensation)")
 
-        fig.savefig(path,bbox_inches='tight')
+        if savepath is not None:
+            fig.savefig(savepath,bbox_inches='tight')
+        if show:
+            plt.show()
+        plt.close()
 
 if __name__ == '__main__':
     import argparse
@@ -423,20 +456,32 @@ if __name__ == '__main__':
         "--event",
         type = int,
         help = "Event number (integer)",
-        required = True,
+        required = False,
     )
-
     parser.add_argument(
         "--output",
         type = str,
         help = "Output plot path",
-        required = True,
+        required = False,
+        default = None,
+    )
+    parser.add_argument(
+        "--embed",
+        action = 'store_true',
+        help = "Interactive environment",
+        required = False,
+        default = False,
     )
 
     args = parser.parse_args()
 
+    print ('Loading dataset')
     dataset = CaloGraphDataset.load(args.dataset)
-    dataset.plot(
-        idx = args.event,
-        path = args.output,
-    )
+    print ('... done')
+    if args.event is not None and args.output is not None:
+        dataset.plot(
+            idx = args.event,
+            savepath = args.output,
+        )
+    if args.embed:
+        from IPython import embed; embed()

@@ -1,11 +1,13 @@
 import os
 import sys
+import math
 import pathlib
 from copy import deepcopy
 import numpy as np
 from tqdm.auto import tqdm
 import torch
 from torch import nn
+import torch_geometric
 from torch_geometric.loader import DataLoader
 from sklearn.metrics import confusion_matrix
 
@@ -24,6 +26,7 @@ class GravBlock(nn.Module):
         dim_space: int,
         dim_propagate: int,
         k: int,
+        graphnorm: bool = False,
     ):
         super().__init__()
 
@@ -41,10 +44,13 @@ class GravBlock(nn.Module):
             propagate_dimensions = dim_propagate,
             k = k,
         )
+        self.graphnorm = torch_geometric.nn.GraphNorm(dim_out) if graphnorm else None
 
     def forward(self,x,row_splits):
         x = self.mlp(x)
         x, _,_,_ = self.grav_layer(x,row_splits)
+        if self.graphnorm is not None:
+            x = self.graphnorm(x)
         return x
 
 class BufferValue(nn.Module):
@@ -96,10 +102,11 @@ class GravNetModel(nn.Module):
 
         self.dim_embed = 64
         self.dim_out = 32
-        self.dim_space = 4
+        self.dim_space = 3
         self.dim_propagate = 16
         self.n_blocks = 4
-        self.k = 64
+        self.k = 8
+        self.graphnorm = True
 
         self.init_layers = nn.ModuleDict(
             {
@@ -110,16 +117,27 @@ class GravNetModel(nn.Module):
         if 'global_params' in self.shapes.keys():
             self.init_layers['global_params'] = nn.Linear(self.shapes['global_params'].values[0],16)
         self.dim_in = 16 * len(self.init_layers)
+        self.init_dense = nn.Sequential(
+            nn.BatchNorm1d(self.dim_in),
+            nn.Linear(self.dim_in, self.dim_embed),
+            nn.BatchNorm1d(self.dim_embed),
+            nn.ELU(),
+            nn.Linear(self.dim_embed, self.dim_embed),
+            nn.BatchNorm1d(self.dim_embed),
+            nn.ELU(),
+            nn.Linear(self.dim_embed, self.dim_out),
+        )
 
         self.blocks = nn.ModuleList(
             [
                 GravBlock(
-                    dim_in = self.dim_in if i == 0 else self.dim_out,
+                    dim_in = self.dim_out,
                     dim_embed = self.dim_embed,
                     dim_out = self.dim_out,
                     dim_space = self.dim_space,
                     dim_propagate = self.dim_propagate,
                     k = self.k,
+                    graphnorm = self.graphnorm,
                 )
                 for i in range(self.n_blocks)
             ]
@@ -127,10 +145,13 @@ class GravNetModel(nn.Module):
 
         self.mlp = nn.Sequential(
             nn.Linear(self.n_blocks * self.dim_out, 256),
+            nn.BatchNorm1d(256),
             nn.ELU(),
             nn.Linear(256, 256),
+            nn.BatchNorm1d(256),
             nn.ELU(),
             nn.Linear(256, 256),
+            nn.BatchNorm1d(256),
             nn.ELU(),
         )
 
@@ -138,16 +159,20 @@ class GravNetModel(nn.Module):
             {
                 'beta' : nn.Sequential(
                     nn.Linear(256,128),
+                    nn.BatchNorm1d(128),
                     nn.ELU(),
                     nn.Linear(128,64),
+                    nn.BatchNorm1d(64),
                     nn.ELU(),
                     nn.Linear(64,1),
                     nn.Sigmoid(),
                 ),
                 'embedding' : nn.Sequential(
                     nn.Linear(256,128),
+                    nn.BatchNorm1d(128),
                     nn.ELU(),
                     nn.Linear(128,64),
+                    nn.BatchNorm1d(64),
                     nn.ELU(),
                     nn.Linear(64,3),
                 ),
@@ -161,8 +186,10 @@ class GravNetModel(nn.Module):
         for name in regression:
             self.heads[name] = nn.Sequential(
                     nn.Linear(256,128),
+                    nn.BatchNorm1d(128),
                     nn.ELU(),
                     nn.Linear(128,64),
+                    nn.BatchNorm1d(64),
                     nn.ELU(),
                     nn.Linear(64,self.shapes['particles'][name].values[0]),
                 )
@@ -171,15 +198,21 @@ class GravNetModel(nn.Module):
         for name in classification:
             self.heads[name] = nn.Sequential(
                     nn.Linear(256,128),
+                    nn.BatchNorm1d(128),
                     nn.ELU(),
                     nn.Linear(128,64),
+                    nn.BatchNorm1d(64),
                     nn.ELU(),
                     nn.Linear(64,self.shapes['particles'][name].values[0]),
                 )
             self.loss_functions[name] = nn.CrossEntropyLoss(reduction='none') if self.shapes['particles'][name].values[0] > 1 else nn.BCELoss(reduction='mean')
 
-        self.optimizer = torch.optim.Adam(self.parameters(), lr=0.0001)
+        self.optimizer = torch.optim.Adam(self.parameters(), lr=0.01)
         self.device = torch.device(device)
+
+    def set_to_device(self,device):
+        self.device = device
+        self.to(self.device)
 
     def forward(self, batch):
         # Init and concat #
@@ -198,6 +231,7 @@ class GravNetModel(nn.Module):
                 ],
                 dim = -1
             )
+        x = self.init_dense(x)
         # Apply blocks and keep track of outputs #
         ys = []
         for block in self.blocks:
@@ -237,9 +271,8 @@ class GravNetModel(nn.Module):
             true = batch['particles'][key][edge_index[1]]
             loss = self.loss_functions[key](pred,true)
             if loss.dim() > 1:
-                loss = loss.mean(dim=-1)
+                loss = loss.sum(dim=-1)
             losses[key] = (beta.ravel() * loss).mean()
-            #losses[key] = (beta.ravel() * loss).sum() / (beta.sum() + 1e-6)
 
         return losses
 
@@ -274,6 +307,7 @@ class GravNetModel(nn.Module):
         batch_size: int,
         n_epochs: int,
         lr: float,
+        n_batches: int = math.inf,
         annealing = None,
         plotter = None,
     ):
@@ -281,17 +315,19 @@ class GravNetModel(nn.Module):
         train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
         valid_loader = DataLoader(valid_dataset, batch_size=batch_size, shuffle=False)
 
+        n_batches_train = min(n_batches,len(train_loader))
+        n_batches_valid = min(n_batches,len(valid_loader))
+
         for param_group in self.optimizer.param_groups:
             param_group['lr'] = lr
 
         self.to(self.device)
         self.train()
 
-        if torch.cuda.is_available():
-            torch.cuda.reset_peak_memory_stats()
+        if 'cuda' in self.device:
             batch = next(iter(train_loader))
-            batch = batch.to("cuda")
-            with torch.amp.autocast('cuda'):
+            batch = batch.to(self.device)
+            with torch.amp.autocast(self.device):
                 out = self(batch)
             print("Peak memory during forward:", torch.cuda.max_memory_allocated() / 1e9, "GB")
 
@@ -301,25 +337,22 @@ class GravNetModel(nn.Module):
             else:
                 factor = 1.
             if annealing is not None and name not in ['total','attraction','repulsion','beta']:
-                midpoint, sharpness = annealing
-                factor *= torch.sigmoid(torch.tensor((epoch - midpoint) / sharpness))
+                factor *= annealing()
             return factor
 
         for epoch in range(n_epochs):
-            if epoch > 50:
-                for param_group in self.optimizer.param_groups:
-                    param_group['lr'] = lr / 10
-
             # Training #
             self.train()
             train_losses = {
-                'total' : torch.zeros(len(train_loader)),
-                'attraction' : torch.zeros(len(train_loader)),
-                'repulsion' : torch.zeros(len(train_loader)),
-                'beta' : torch.zeros(len(train_loader)),
-                **{key: torch.zeros(len(train_loader)) for key in self.loss_functions.keys() if key != 'beta'}
+                'total' : torch.zeros(n_batches_train),
+                'attraction' : torch.zeros(n_batches_train),
+                'repulsion' : torch.zeros(n_batches_train),
+                'beta' : torch.zeros(n_batches_train),
+                **{key: torch.zeros(n_batches_train) for key in self.loss_functions.keys() if key != 'beta'}
             }
-            for batch_idx, batch in tqdm(enumerate(train_loader),total=len(train_loader),desc='Training batches',leave=False):
+            for batch_idx, batch in tqdm(enumerate(train_loader),total=n_batches_train,desc='Training batches',leave=False):
+                if batch_idx >= n_batches_train:
+                    break
                 # Move to device #
                 batch = batch.to(self.device)
                 # Preprocessing # # TODO : move to forward
@@ -343,13 +376,15 @@ class GravNetModel(nn.Module):
             # Validation #
             self.eval()
             valid_losses = {
-                'total' : torch.zeros(len(valid_loader)),
-                'attraction' : torch.zeros(len(valid_loader)),
-                'repulsion' : torch.zeros(len(valid_loader)),
-                'beta' : torch.zeros(len(valid_loader)),
-                **{key: torch.zeros(len(valid_loader)) for key in self.loss_functions.keys() if key != 'beta'}
+                'total' : torch.zeros(n_batches_valid),
+                'attraction' : torch.zeros(n_batches_valid),
+                'repulsion' : torch.zeros(n_batches_valid),
+                'beta' : torch.zeros(n_batches_valid),
+                **{key: torch.zeros(n_batches_valid) for key in self.loss_functions.keys() if key != 'beta'}
             }
-            for batch_idx, batch in tqdm(enumerate(valid_loader),total=len(valid_loader),desc='Validation batches',leave=False):
+            for batch_idx, batch in tqdm(enumerate(valid_loader),total=n_batches_valid,desc='Validation batches',leave=False):
+                if batch_idx >= n_batches_valid:
+                    break
                 # Move to device #
                 batch = batch.to(self.device)
                 # Preprocessing # TODO : move to forward
@@ -382,7 +417,10 @@ class GravNetModel(nn.Module):
                     plotter.add_train_value(f'{key}',train_losses[key].mean())
                     plotter.add_valid_value(f'{key}',valid_losses[key].mean())
                 plotter.add_lr_value('lr',lr)
+            if annealing is not None:
+                annealing.new_epoch()
 
+    @torch.no_grad()
     def inference(
         self,
         dataset,
@@ -408,8 +446,7 @@ class GravNetModel(nn.Module):
             # Preprocessing #
             proc_batch = self.apply_preprocessing(proc_batch)
             # Process #
-            with torch.no_grad():
-                outputs = self(proc_batch)
+            outputs = self(proc_batch)
             # Add output to batch (hack with slice_dict) #
             batch._slice_dict['predictions'] = {}
             batch._inc_dict['predictions'] = {}

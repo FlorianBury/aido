@@ -70,7 +70,7 @@ if __name__ == "__main__":
     ui_interface.container_extra_flags = ""
     #ui_interface.container_extra_flags = "-B /software,/cephfs"
     ui_interface.verbose = True
-    results_dir: str = "/cephfs/dice/users/lw23382/AIDO/aido_e2e_v10"
+    results_dir: str = "/cephfs/dice/users/lw23382/AIDO/aido_e2e_v16"
 
     # Non optimizable #
     parameters = [
@@ -80,13 +80,13 @@ if __name__ == "__main__":
     ]
     # Layers #
     #granularities = np.r_[1,10:200:10,200].tolist()
-    granularities = [50]
+    granularities = [10,20,30,40,50]
     for i in range(num_layers):
         parameters.append(
-            aido.SimulationParameter(f"thickness_absorber:{i}", 3., min_value=0., sigma=2.5),
+            aido.SimulationParameter(f"thickness_absorber:{i}", 10., min_value=0., sigma=2.5),
         )
         parameters.append(
-            aido.SimulationParameter(f"thickness_scintillator:{i}", 10., min_value=0., sigma=2.5)
+            aido.SimulationParameter(f"thickness_scintillator:{i}", 3., min_value=0., sigma=2.5)
         )
         parameters.append(
             aido.SimulationParameter(
@@ -94,7 +94,7 @@ if __name__ == "__main__":
                 "G4_Fe",
                 discrete_values=["G4_Pb", "G4_Fe"],
                 cost=[25, 4.166],
-                probabilities=[0.0, 1.0],
+                probabilities=[0.5, 0.5],
             )
         )
         parameters.append(
@@ -103,13 +103,13 @@ if __name__ == "__main__":
                 "G4_POLYSTYRENE",
                 discrete_values=["G4_PbWO4", "G4_POLYSTYRENE"],
                 cost=[2500.0, 0.01],
-                probabilities=[1.0, 0.0],
+                probabilities=[0.5, 0.5],
             )
         )
         parameters.append(
             aido.SimulationParameter(
                 f"granularity_scintillator:{i}",
-                50,
+                10,
                 discrete_values = granularities,
                 cost = [0] * len(granularities),
                 probabilities = [1./len(granularities)] * len(granularities),
@@ -120,9 +120,9 @@ if __name__ == "__main__":
     aido.optimize(
         parameters=aido.SimulationParameterDictionary(parameters),
         user_interface=ui_interface,
-        simulation_tasks=30,
+        simulation_tasks=100,
         max_iterations=1,
-        threads=30,
+        threads=1,
         results_dir=results_dir,
         description="""
 Optimization of a sampling calorimeter with cost and length constraints.

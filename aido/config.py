@@ -7,48 +7,74 @@ from aido.logger import logger
 
 @dataclass
 class OptimizerConfig:
-    lr: float = 0.02
+    lr: float = 1e-2
     batch_size: int = 512
-    n_epochs: int = 40
+    n_epochs: int = 30
 
 
 @dataclass
 class SurrogateConfig:
-    n_epochs: int = 100
-    batch_size: int = 64
-    lr: float = 1e-4
+    cls: str = 'SurrogateAcceptanceINN'
+    device : str = 'cuda:2'
+    num_workers : int = 0
+    n_epochs: Tuple[int] = (
+        1,
+        #50,
+        #25,
+    )
+    batch_sizes: Tuple[int] = (
+        256,
+        256,
+        256,
+    )
+    lrs: Tuple[float] = (
+        1e-3,
+        1e-4,
+        1e-5,
+    )
+    teacher_forcings: Tuple[float] = (
+        1.,
+        1.,
+        1.,
+    )
+    pretrain: Tuple[bool] = (
+        True,
+        False,
+        False,
+    )
     regression: Tuple[str] = (
-        'E',
         'pos',
+        #'E',
     )
     classification: Tuple[str] = (
-        'id',
+        #'id',
     )
-    ordering: str = 'E'
+    max_seq_len: int = 20
+    ordering: str = 'random'
     loss_factors: Dict[str, float] = field(
         default_factory = lambda : {
-            "pos"        : 1.0,
-            "E"          : 2.0,
-            "id"         : 100.0,
+            "flow"       : 1.0,
             'time'       : 1.0,
             'mult'       : 1.0,
+            'matching'   : 0.,
         }
     )
-    multiplicity: str = 'hard'
-    timing: bool = True
+    multiplicity: str = 'none'
+    timing: bool = False
+    threshold_quantile = 0.
 
 
 @dataclass
 class LossConfig:
     loss_factors: Dict[str, float] = field(
         default_factory = lambda : {
-            "pos"        : 100.0,
-            "E"          : 10.0,
-            "id"         : 1.0,
+            "pos"        : 1.0,
+            #"E"          : 1.0,
+            #"id"         : 1.0,
         }
     )
-    fake_penalty: float = 10.
-    missing_penalty: float = 10.
+    fake_penalty: float = 0.
+    missing_penalty: float = 0.
     oversampling: int = 1
 
 @dataclass

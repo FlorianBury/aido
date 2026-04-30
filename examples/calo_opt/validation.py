@@ -17,10 +17,17 @@ matplotlib.use("agg")
 def number_plot(ax,data_list):
     N_true = [data['particles']['pos'].shape[0] for data in data_list]
     N_reco = [data['vertices']['idx'].shape[0] for data in data_list]
-
+    labels = np.arange(max(max(N_true),max(N_reco)))
     cm = confusion_matrix(N_true, N_reco)
-    disp = ConfusionMatrixDisplay(confusion_matrix=cm)
-    disp.plot(ax=ax, cmap=plt.cm.Blues, colorbar=True, values_format='d', text_kw={'fontsize': 6})
+    cm = confusion_matrix(N_true, N_reco, labels=labels)
+    disp = ConfusionMatrixDisplay(confusion_matrix=cm,display_labels=labels)
+    disp.plot(
+        ax = ax,
+        cmap = plt.cm.Blues,
+        colorbar = True,
+        values_format = 'd',
+        text_kw = {'fontsize': 6},
+    )
     ax.invert_yaxis()
     ax.set_ylabel('True number of particles')
     ax.set_xlabel('Reco number of particles')

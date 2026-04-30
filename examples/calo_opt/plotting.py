@@ -1,5 +1,6 @@
-import glob
 import os
+import sys
+import glob
 import pathlib
 import re
 from typing import Iterable
@@ -7,6 +8,9 @@ from typing import Iterable
 import matplotlib
 import matplotlib.colors as mcolors
 import matplotlib.pyplot as plt
+from matplotlib.collections import LineCollection
+from matplotlib.patches import Rectangle
+
 import numpy as np
 import pandas as pd
 
@@ -16,12 +20,25 @@ matplotlib.use("agg")
 
 
 class CaloOptPlotting:
-
     def __init__(self, results_dir: str | os.PathLike) -> None:
         self.results_dir = results_dir
-        self.reco_output_paths: str = glob.glob(
-            f"{results_dir}/task_outputs/iteration=*/validation=False/reco_output_df"
-        )
+        self.reco_output_paths = {}
+        for file_name in glob.glob(f"{results_dir}/task_outputs/iteration=*/validation=False/reco_output_dense"):
+            iteration = int(re.search(r"iteration=(\d+)", file_name).group(1))
+            self.reco_output_paths[iteration] = file_name
+        self.simulation_parameter_paths = {
+            iteration : [
+                json_file
+                for json_file in glob.glob(
+                    f"{results_dir}/task_outputs/iteration={iteration}/validation=False/simulation_task_id=*/param_dict.json"
+                )
+            ]
+            for iteration in self.reco_output_paths.keys()
+        }
+        self.optimizer_parameter_paths = {
+            iteration : f"{results_dir}/parameters/param_dict_iter_{iteration}.json"
+            for iteration in self.reco_output_paths.keys()
+        }
 
     @staticmethod
     def mplstyle() -> None:
@@ -39,14 +56,14 @@ class CaloOptPlotting:
             "Detector Optimization",
             transform=ax.transAxes, fontsize=14, style='italic', va='top', ha='left'
         )
-        plt.text(
-            0.015, 0.98,
-            "Sampling Calorimeter\n"
-            "50% photons and 50% pions\n"
-            r"$20 \times 400$" + " MC Events / Iteration\n"
-            r"$E_\text{true}=[1, 20]$" + " GeV",
-            transform=ax.transAxes, va='top', ha='left'
-        )  # Adjust the text as fitting
+        #plt.text(
+        #    0.015, 0.98,
+        #    "Sampling Calorimeter\n"
+        #    "50% photons and 50% pions\n"
+        #    r"$20 \times 400$" + " MC Events / Iteration\n"
+        #    r"$E_\text{true}=[1, 20]$" + " GeV",
+        #    transform=ax.transAxes, va='top', ha='left'
+        #)  # Adjust the text as fitting
         return ax
 
     def plot(self, parameter_dict: aido.SimulationParameterDictionary | None = None) -> None:
@@ -178,27 +195,22 @@ class CaloOptPlotting:
             plt.close()
 
         def plot_calorimeter_sideview(
-            add_legend: bool = None,
+            add_legend: bool = False,
         ) -> None:
             df_list = []
-            df_materials_list = []
             parameter_dir = os.path.join(self.results_dir, "parameters/")
+            file_names = os.listdir(parameter_dir)
+            list_continuous = [None] * len(file_names)
+            list_discrete = [None] * len(file_names)
 
-            for file_name in os.listdir(parameter_dir):
+            for file_name in file_names:
                 param_dict = aido.SimulationParameterDictionary.from_json(parameter_dir + file_name)
-                df_list.append(pd.DataFrame(
-                    param_dict.get_current_values(format="dict", types="continuous"),
-                    index=[param_dict.iteration],
-                ))
-                df_materials = pd.DataFrame(param_dict.get_probabilities()).drop(index=0)
-                df_materials.index = [param_dict.iteration]
-                df_materials_list.append(df_materials)
-
-            df: pd.DataFrame = pd.concat(df_list, axis=0).sort_index()
-            df_materials: pd.DataFrame = pd.concat(df_materials_list, axis=0).sort_index()
-            df_materials.columns = df.columns
+                idx = param_dict.iteration
+                list_continuous[idx] = param_dict.get_current_values(format="dict", types="continuous")
+                list_discrete[idx] = param_dict.get_probabilities()
 
             fig, ax = plt.subplots(figsize=(8.5, 5.5))
+            plt.subplots_adjust(right=0.85)
             ax = self.add_plot_header(ax)
             absorber_cmap = mcolors.LinearSegmentedColormap.from_list("blue_grey", ["blue", "grey"])
             scintillator_cmap = plt.get_cmap("spring")
@@ -211,21 +223,63 @@ class CaloOptPlotting:
                 else:
                     return "white"
 
-            for i in df.index:
+            max_len = 0.
+            min_spacing = 0.30
+            max_spacing = 0.80
+            spacings = np.linspace(
+                min_spacing,
+                max_spacing,
+                len(list_discrete[0]['granularity_scintillator:0']),
+            )
+            for i in range(len(list_continuous)):
                 bottom = 0
                 plt.gca().set_prop_cycle(None)
+                assert list_continuous[i] is not None
+                assert list_discrete[i] is not None
+                for column, value in list_continuous[i].items():
+                    if not 'thickness' in column:
+                        continue
+                    layer = column.replace('thickness_','')
+                    material_prob = list_discrete[i][f'material_{layer}']
+                    bar = ax.bar(
+                        x = i,
+                        height = value,
+                        bottom = bottom,
+                        color = get_color(column, material_prob),
+                        width = 1,
+                        align = "edge",
+                        label = column.replace("_", " ").removeprefix("thickness ").capitalize(),
+                    )[0]
+                    if 'scintillator' in column:
+                        granularity_prob = list_discrete[i][f'granularity_{layer}']
+                        spacing = sum(granularity_prob * spacings)
 
-                for column in df.columns:
-                    plt.bar(
-                        i,
-                        df[column][i],
-                        bottom=bottom,
-                        color=get_color(column, df_materials[column][i]),
-                        width=1,
-                        align="edge",
-                        label=column.replace("_", " ").removeprefix("thickness ").capitalize(),
-                    )
-                    bottom += df[column][i]
+                        x0 = bar.get_x()
+                        y0 = bar.get_y()
+                        w  = bar.get_width()
+                        h  = bar.get_height()
+
+                        lines = []
+                        offset = -h
+                        while offset < w:
+                            lines.append([
+                                (x0 + offset,     y0),
+                                (x0 + offset + h, y0 + h)
+                            ])
+                            offset += spacing
+
+                        lc = LineCollection(
+                            lines,
+                            colors='black',
+                            linewidths=0.6,
+                            alpha=0.6,
+                            transform=ax.transData
+                        )
+                        lc.set_clip_path(bar.get_path(), bar.get_transform())
+                        ax.add_collection(lc)
+
+                    bottom += value
+                max_len = max(max_len,bottom)
 
             if add_legend:
                 handles, labels = plt.gca().get_legend_handles_labels()
@@ -234,9 +288,11 @@ class CaloOptPlotting:
 
             plt.ylabel("Longitudinal Calorimeter Composition [cm]")
             plt.xlabel("Iteration")
-            plt.xlim(0, len(df))
-            plt.ylim(0, 220)
+            plt.xlim(0, len(list_continuous))
+            plt.ylim(0, max_len * 1.1)
             ax = self.add_plot_header(ax)
+
+            # Add colorbar for absorber #
             cbar_absorber = plt.cm.ScalarMappable(cmap=absorber_cmap)
             cbar_absorber.set_array([])
             cbar1 = plt.colorbar(
@@ -259,7 +315,32 @@ class CaloOptPlotting:
             )
             cbar2.ax.invert_yaxis()
             cbar2.ax.set_yticks([0, 1], labels=['PbWO4', 'Polystyrene'], rotation=90, va='center')  # Custom ticks
-            plt.tight_layout()
+
+            # Add custom bar for granularity #
+            cax = fig.add_axes([0.9, 0.1, 0.04, 0.8])  # [left, bottom, width, height] in figure coords
+            cax.set_xlim(0, 1.)
+            cax.set_ylim(0, 1.)
+            cax.axis('off')  # hide axes ticks
+
+            rect = Rectangle((0, 0), 1, 1, facecolor='white', edgecolor='black')
+            cax.add_patch(rect)
+            lines = []
+            offset = - 1
+            max_spacing /= 10
+            min_spacing /= 10
+
+            while offset < 2:
+                spacing = max_spacing - (max_spacing - min_spacing) * ((offset + 1) / 2)
+                start = (offset, 0)
+                end   = (offset + 1, 1)
+                lines.append([start, end])
+                offset += spacing
+                print( spacing )
+            lc = LineCollection(lines, colors='black', linewidths=0.6, alpha=0.6, transform=cax.transData)
+            lc.set_clip_path(rect.get_path(), rect.get_transform())
+            cax.add_collection(lc)
+
+            #plt.tight_layout()
             plt.savefig(os.path.join(self.results_dir, "plots/calorimeter_sideview"), dpi=500)
             plt.close()
 
@@ -299,7 +380,7 @@ class CaloOptPlotting:
             plt.tight_layout()
             plt.savefig(os.path.join(self.results_dir, "plots/energy_resolution_evolution.pdf"))
             plt.close()
-        
+
         def plot_constraints() -> None:
             def cost(parameter_dict: aido.SimulationParameterDictionary) -> float:
                 cost = 0.0
@@ -333,17 +414,16 @@ class CaloOptPlotting:
             print(f"No task outputs found in '{self.results_dir}/task_outputs/'. Skipping plotting.")
             return None
 
-        plot_energy_resolution_all()
-        plot_reco_loss_all()
-        plot_energy_resolution_first_and_last()
-        plot_energy_resolution_evolution()
+        #plot_energy_resolution_all()
+        #plot_reco_loss_all()
+        #plot_energy_resolution_first_and_last()
+        #plot_energy_resolution_evolution()
         plot_calorimeter_sideview()
         plt.close("all")
         return None
 
-
 if __name__ == "__main__":
-    results_dir: str = ...
+    results_dir: str = sys.argv[1]
 
     plotter = CaloOptPlotting(results_dir)
     plotter.mplstyle()

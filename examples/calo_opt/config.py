@@ -6,7 +6,7 @@ from aido.logger import logger
 
 @dataclass
 class SimulationConfig:
-    number_simulations_per_particle: int = 250
+    number_simulations_per_particle: int = 1000
     number_stitched_events: int = 1000
     mean_number_particles_per_event: int = 5
     min_distance_cut : float = 0.
@@ -25,18 +25,24 @@ class SimulationConfig:
 class TimingConfig:
     enabled: bool = True
     runs : int = 1
+    device : str = 'cpu'
+    #device : str = 'cuda:2'
 
 @dataclass
 class GraphConfig:
+    device: str = 'cuda:2'
     retrain: bool = False
-    n_epochs: int = 20
-    batch_size: int = 256
-    lr: float = 1e-3
-    annealing: Tuple[float] = (10,1.)
+    n_epochs: Tuple[int] = (40,20,10)
+    n_batches: Tuple[int] = (500,500,500)
+    batch_sizes: Tuple[int] = (256,256,256)
+    lrs: Tuple[float] = (1e-3,1e-4,1e-5)
+    annealing: Tuple[float] = (20,1.)
+    pretrain: Tuple[bool] = (True,False,False)
     inputs: Tuple[str] = (
         "pos",
         "E",
         "layer",
+        "cell",
     )
     regression: Tuple[str] = (
         "E",
@@ -49,10 +55,10 @@ class GraphConfig:
         default_factory = lambda : {
             "attraction" : 1.0,
             "repulsion"  : 1.0,
-            "beta"       : 20.0,
-            "pos"        : 100.0,
-            "E"          : 100.0,
-            "id"         : 10.0,
+            "beta"       : 1.0,
+            "E"          : 1.0,
+            "pos"        : 1.0,
+            "id"         : 1.0,
         }
     )
     t_beta: float = 0.1

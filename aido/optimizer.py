@@ -1,5 +1,6 @@
 import os
 from typing import Callable, Dict, Tuple
+from tqdm.auto import tqdm
 
 import numpy as np
 import pandas as pd
@@ -36,9 +37,7 @@ class Optimizer(torch.nn.Module):
         """
         super().__init__()
         self.parameter_dict = parameter_dict
-
-        dev = "cuda" if torch.cuda.is_available() else "cpu"
-        self.device = dev or torch.device(dev)
+        self.device = device
 
         self.parameter_module = ParameterModule(self.parameter_dict).to(self.device)
         self.optimizer = torch.optim.Adam(self.parameter_module.parameters())
@@ -158,6 +157,7 @@ class Optimizer(torch.nn.Module):
 
         self.starting_parameters_continuous = self.parameter_module.continuous_tensors().clone().detach()
 
+        print (f'Training optimizer : {n_epochs=}, {batch_size=}, {lr=}')
         for param_group in self.optimizer.param_groups:
             param_group['lr'] = lr
 
@@ -172,19 +172,20 @@ class Optimizer(torch.nn.Module):
             epoch_constraints_loss = 0.0
             stop_epoch = False
 
-            for batch_idx, batch in enumerate(data_loader):
+            for batch_idx, batch in tqdm(enumerate(data_loader),desc='Batches',leave=False,total=len(data_loader)):
                 parameters_batch: torch.Tensor = self.parameter_module()
                 batch = self.surrogate_model.move_batch(batch,parameters_batch.device)
                 batch['params'] = parameters_batch.expand(batch['params'].shape[0],-1,-1)
 
                 samples,mask,time = self.surrogate_model.sample(batch)
 
-                loss = loss_matching(
+                losses = loss_matching(
                     batch['true']['data'],
                     batch['true']['mask'],
                     samples,
                     mask,
-                ).mean()
+                )
+                loss = losses['total'].mean()
                 surrogate_loss_detached = loss.item()
                 constraints_loss = self.other_constraints(
                     additional_constraints,
@@ -204,8 +205,11 @@ class Optimizer(torch.nn.Module):
                 self.optimizer.zero_grad()
 
                 self.parameter_dict.update_current_values(self.parameter_module.physical_values(format="dict"))
-                self.parameter_dict.update_probabilities(self.parameter_module.probabilities)
-                self.save_parameters(epoch, batch_idx, surrogate_loss_detached, parameter_optimizer_savepath)
+                try:
+                    self.parameter_dict.update_probabilities(self.parameter_module.probabilities)
+                except:
+                    from IPython import embed; embed()
+                #self.save_parameters(epoch, batch_idx, surrogate_loss_detached, parameter_optimizer_savepath)
 
                 epoch_loss += loss.item()
                 epoch_constraints_loss += constraints_loss.item()
@@ -229,6 +233,7 @@ class Optimizer(torch.nn.Module):
             epoch_constraints_loss /= batch_idx + 1
             self.optimizer_loss.append(epoch_loss)
             self.constraints_loss.append(epoch_constraints_loss)
+
 
             if stop_epoch:
                 break
