@@ -67,6 +67,9 @@ class Pareto:
         for iteration in iterations:
             print (f'Iteration {iteration}/{len(iterations)}')
             df = pd.read_parquet(self.reco_output_paths[iteration])
+            N = int(df.shape[0] * 0.8)
+            #df = df.iloc[:N]
+            #df = df.iloc[N:]
             param_dict = aido.SimulationParameterDictionary.from_json(self.optimizer_parameter_paths[iteration])
             idx = self.mask_parameters(df['Parameters'],param_dict)
             reco_losses.append(np.mean(df["Loss"]["Reco_loss"][idx]))

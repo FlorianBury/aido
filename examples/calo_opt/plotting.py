@@ -13,6 +13,7 @@ import matplotlib.colors as mcolors
 import matplotlib.pyplot as plt
 from matplotlib.colors import ListedColormap, BoundaryNorm
 from matplotlib.cm import ScalarMappable
+from mpl_toolkits.axes_grid1 import make_axes_locatable
 
 from sklearn.metrics import roc_curve, auc
 from sklearn.metrics import ConfusionMatrixDisplay, confusion_matrix
@@ -648,11 +649,12 @@ class CaloOptPlotting:
             class_losses_best = np.array(class_losses_best)[order]
 
             df_loss: pd.DataFrame = aido.Plotting.optimizer_loss(results_dir=self.results_dir)
-            df_loss = df_loss[["Scaled Epoch", "Loss"]]
+            df_loss = df_loss[["Scaled Epoch", "Loss", "LR"]]
 
             fig, ax = plt.subplots(figsize=(7, 5))
+            ax_twin = ax.twinx()
             ax = self.add_plot_header(ax)
-            plt.fill_between(
+            ax.fill_between(
                 iterations,
                 reco_losses[:,0],
                 reco_losses[:,1],
@@ -661,13 +663,13 @@ class CaloOptPlotting:
                 alpha = 0.3,
                 label="Mean Reconstruction Loss " + r"($\mathcal{L}_\text{reco}$)",
             )
-            plt.plot(
+            ax.plot(
                 iterations,
                 reco_losses_best,
                 color = 'royalblue',
                 linestyle = 'dashed',
             )
-            plt.fill_between(
+            ax.fill_between(
                 iterations,
                 class_losses[:,0],
                 class_losses[:,1],
@@ -676,39 +678,46 @@ class CaloOptPlotting:
                 alpha = 0.3,
                 label="Mean Classification Loss " + r"($\mathcal{L}_\text{class}$)",
             )
-            plt.plot(
+            ax.plot(
                 iterations,
                 class_losses_best,
                 color = 'red',
                 linestyle = 'dashed',
             )
-            plt.plot(
+            ax.plot(
                 df_loss["Scaled Epoch"],
                 df_loss["Loss"],
                 color = 'green',
                 label="Optimizer Loss " + r"($\mathcal{L}'$)"
             )
-            plt.fill_between(
+            ax.fill_between(
                 [],
                 [],[],
                 color = 'grey',
                 alpha = 0.3,
                 label = 'Sampled parameters (current iteration)',
             )
-            plt.plot(
+            ax.plot(
                 [],[],
                 color = 'black',
                 linestyle = 'dashed',
                 label = 'Best parameters (previous iteration)',
             )
-            plt.legend(loc='upper right',fontsize=10)
-            plt.xlabel("Iteration")
-            plt.ylabel("Loss")
-            plt.xlim(
+            ax_twin.plot(
+                df_loss["Scaled Epoch"],
+                df_loss["LR"],
+                color = 'black',
+                linestyle = 'dashed',
+                label = "Learning rate",
+            )
+            ax.legend(loc='upper right',fontsize=10)
+            ax.set_xlabel("Iteration")
+            ax.set_ylabel("Loss")
+            ax.set_xlim(
                 min(iterations.min(),df_loss["Scaled Epoch"].min()),
                 max(iterations.max(),df_loss["Scaled Epoch"].max()),
             )
-            plt.ylim(
+            ax.set_ylim(
                 min(
                     [
                         reco_losses.min(),
@@ -728,7 +737,13 @@ class CaloOptPlotting:
                     ]
                 ) * 2,
             )
-            plt.yscale("log")
+            ax.set_yscale("log")
+            ax_twin.set_yscale("log")
+            ax_twin.set_ylim(
+                min(df_loss['LR']) / 2,
+                max(df_loss['LR']) * 2,
+            )
+            ax_twin.set_ylabel("Learning rate")
             plt.tight_layout()
             plt.savefig(os.path.join(self.results_dir, "plots/loss_evolution.png"))
             plt.close()
@@ -748,17 +763,22 @@ class CaloOptPlotting:
                 return array,uniq
 
             N = len(params_list[0])
-            fig,axs = plt.subplots(ncols=N,nrows=N,figsize=(5*N,4*N))
+            fig,axs = plt.subplots(ncols=N,nrows=N,figsize=(6*N,4*N))
             plt.subplots_adjust(
                 left = 0.05,
                 bottom = 0.05,
                 top = 0.95,
-                right = 0.9,
-                wspace = 0.4,
-                hspace = 0.4,
+                right = 0.95,
+                wspace = 0.6,
+                hspace = 0.6,
             )
             param_names = list(params_list[0].keys())
+
             opt_colors = plt.cm.inferno(np.linspace(0, 1, len(params_opt)))[::-1]
+            cmap = ListedColormap(opt_colors)
+            norm = BoundaryNorm(iterations, cmap.N)
+            mappable = ScalarMappable(norm=norm, cmap=cmap)
+
             if discrete:
                 params_opt = [
                     {name:format_discrete(np.array([val]))[0] for name,val in params.items()}
@@ -800,6 +820,7 @@ class CaloOptPlotting:
                             axs[i,j].set_xticks(np.arange(len(xticklabels))+0.5)
                             axs[i,j].set_xticklabels(xticklabels,fontsize=10,va='center',ha='center')
                     else:
+                        axs[i,j].set_box_aspect(1)
                         sc = axs[i,j].scatter(
                             xvalues,
                             yvalues,
@@ -816,7 +837,7 @@ class CaloOptPlotting:
                                 params[xname],
                                 params[yname],
                                 color = opt_colors[idx],
-                                marker = 'X',
+                                marker = 'x',
                                 s = 25,
                             )
                         axs[i,j].set_xlabel(xname)
@@ -829,15 +850,15 @@ class CaloOptPlotting:
                         if yticklabels is not None:
                             axs[i,j].set_yticks(np.arange(len(yticklabels))+0.5)
                             axs[i,j].set_yticklabels(yticklabels,fontsize=10,rotation=90,va='center',ha='center')
-                        fig.colorbar(sc, ax=axs[i,j], label="Mean loss")
-            cmap = ListedColormap(opt_colors)
-            norm = BoundaryNorm(iterations, cmap.N)
-            mappable = ScalarMappable(norm=norm, cmap=cmap)
-            cax = fig.add_axes([0.95, 0.1, 0.02, 0.85])
-            cbar = fig.colorbar(mappable, cax=cax, pad=0.02, extend='max')
-            cbar.set_label("Iterations", fontsize=32)
-            cbar.set_ticks(iterations)
-            cbar.set_ticklabels(iterations)
+
+                        divider = make_axes_locatable(axs[i,j])
+                        cax1 = divider.append_axes("right", size="5%", pad=0.08)
+                        cax2 = divider.append_axes("right", size="5%", pad=1.0)
+
+                        fig.colorbar(sc, cax=cax1, label="Mean loss")
+                        cbar = fig.colorbar(mappable, cax=cax2, label='Iterations')
+                        #cbar.set_ticks(iterations)
+                        #cbar.set_ticklabels(iterations)
 
             return fig
 
@@ -874,7 +895,7 @@ class CaloOptPlotting:
             )
             fig.savefig(
                 os.path.join(self.results_dir, f"plots/{loss_name.lower()}_continuous_surface.png"),
-                dpi = 200,
+                dpi = 300,
             )
             plt.close()
 
@@ -888,7 +909,7 @@ class CaloOptPlotting:
             )
             fig.savefig(
                 os.path.join(self.results_dir, f"plots/{loss_name.lower()}_discrete_surface.png"),
-                dpi = 200,
+                dpi = 300,
             )
             plt.close()
 

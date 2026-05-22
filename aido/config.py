@@ -7,26 +7,29 @@ from aido.logger import logger
 
 @dataclass
 class OptimizerConfig:
-    scale: float = 0.8                      # scale to check if new parameter is outside the box
-    lr: float = 0.01                        # learning rate
-    end_factor: float = 0.1                 # lr * end_factor after n_epochs (linearly) [1 = no effect]
-    gamma: float = 1.0                      # exponential decay of LR as optimisation goes (lr *= gamma^iteration) [1 = no effect)]
-    batch_size: int = 512                   # optimizer batch size
-    n_epochs: int = 50                      # max number of epochs (per iteration)
-    turn_on_reco: Tuple = (1.,1.,1.,50)     # sigmoid annealing parameters (lambda_start, lambda_end, k, T) with
-    turn_on_class: Tuple = (2.,2.,1.,100)   # sigmoid(t) = (1+np.exp(-k*(x-T))) (T=half-value, k=sharpness)
+    cutoff: float = 0.8
+    scale: float = 2.0
+    base_lr: float = 0.1
+    min_lr: float = 0.0001
+    factor: float = 0.1
+    patience: int = 25
+    threshold: float = 0.05
+    batch_size: int = 512
+    n_epochs: int = 50
+    alpha: float = 1.0
 
 @dataclass
 class SurrogateConfig:
-    retrain: bool = False
-    momentum: float = 0.1
+    cls_name: str = 'SurrogateDiffusion'
+    device: str = 'cuda:1'
+    retrain: bool = True
+    momentum: float = 0.01
     n_epoch_pre: int = 50
-    n_epochs_main: int = 50
+    n_epochs_main: int = 25
     batch_size: int = 512
-    betas: Tuple = (1e-4,0.2)
-    n_time_steps: int = 100
     reconstruction: bool = True
     classification: bool = True
+    redraw: int = 0
 
 @dataclass
 class SimulationConfig:

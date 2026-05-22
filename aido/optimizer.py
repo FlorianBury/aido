@@ -7,6 +7,7 @@ import torch
 from torch.utils.data import DataLoader
 
 from aido.logger import logger
+from aido.config import OptimizerConfig
 from aido.optimization_helpers import ParameterModule
 from aido.simulation_helpers import SimulationParameterDictionary
 from aido.surrogate import Surrogate, SurrogateDataset
@@ -26,6 +27,7 @@ class Optimizer(torch.nn.Module):
     def __init__(
             self,
             parameter_dict: SimulationParameterDictionary,
+            config_dict: OptimizerConfig,
             device: str | None = None
             ):
         """
@@ -41,22 +43,37 @@ class Optimizer(torch.nn.Module):
         self.device = dev or torch.device(dev)
 
         self.parameter_module = ParameterModule(self.parameter_dict).to(self.device)
-        self.optimizer = torch.optim.Adam(self.parameter_module.parameters())
+        self.optimizer = torch.optim.RAdam(
+            params = self.parameter_module.parameters(),
+            lr = config_dict.base_lr,
+        )
+        self.scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
+            optimizer = self.optimizer,
+            mode = 'min',
+            factor = config_dict.factor,
+            min_lr = config_dict.min_lr,
+            patience = config_dict.patience,
+            threshold = config_dict.threshold,
+            threshold_mode = 'rel',
+        )
 
     def to(self, device: str | torch.device, **kwargs) -> "Optimizer":
         """ Move all Tensors and modules to 'device'.
         """
         self.device = device if isinstance(device, torch.device) else torch.device(device)
         super().to(self.device, **kwargs)
-        return self
+        for state in self.optimizer.state.values():
+            for k, v in state.items():
+                if torch.is_tensor(v):
+                    state[k] = v.to(device)
 
-    def check_parameters_are_local(self, updated_parameters: torch.Tensor, scale=1.0) -> bool:
+    def check_parameters_are_local(self, updated_parameters: torch.Tensor, cutoff=1.0) -> bool:
         """ Assure that the predicted parameters by the optimizer are within the bounds of the covariance
         matrix spanned by the 'sigma' of each parameter.
         """
         diff = updated_parameters - self.starting_parameters_continuous
         diff = diff.detach().cpu().numpy()
-        return np.dot(diff, np.dot(np.linalg.inv(self.parameter_dict.covariance), diff)) < scale
+        return np.dot(diff, np.dot(np.linalg.inv(self.parameter_dict.covariance), diff)) < cutoff
 
     @property
     def boundaries(self) -> torch.Tensor:
@@ -124,22 +141,33 @@ class Optimizer(torch.nn.Module):
             if param.requires_grad and not name.startswith("surrogate_model"):
                 logger.debug(f"Optimizer {name}: Data={param.data}, grads={param.grad}")
 
+#    def set_learning_rate(self, lr:float) -> None:
+#        self.learning_rate = lr
+#        for param_group in self.optimizer.param_groups:
+#            param_group['lr'] = self.learning_rate
+
+    @property
+    def learning_rate(self):
+        lrs = [pg["lr"] for pg in self.optimizer.param_groups]
+        if len(lrs) > 1:
+            assert len(set(lrs)) == 1, f'LRs found : {lrs}'
+        lr = lrs[0]
+        return lr
+
     def optimize(
             self,
             surrogate_model: Surrogate,
             dataset: SurrogateDataset,
             batch_size: int,
             n_epochs: int,
-            alpha_reco: float,
-            alpha_class: float,
+            alpha: float,
             reconstruction_loss: Callable[[torch.Tensor, torch.Tensor], torch.Tensor],
             classification_loss: Callable[[torch.Tensor, torch.Tensor], torch.Tensor],
             additional_constraints: None | Callable[[SimulationParameterDictionary, Dict], torch.Tensor] = None,
             parameter_optimizer_savepath: str | os.PathLike | None = None,
             device: str | None = None,
+            cutoff: float = 2.0,
             scale: float = 0.8,
-            lr: float = 0.01,
-            end_factor: float = None,
     ) -> Tuple[SimulationParameterDictionary, bool]:
         """ Perform the optimization step.
 
@@ -157,8 +185,7 @@ class Optimizer(torch.nn.Module):
         """
         self.starting_parameter_dict = self.parameter_dict
         self.surrogate_model = surrogate_model
-        self.device = device or self.device
-        self.to(self.device)
+        self.to(self.surrogate_model.device)
 
         self.starting_parameters_continuous = self.parameter_module.continuous_tensors().clone().detach()
 
@@ -168,6 +195,7 @@ class Optimizer(torch.nn.Module):
         self.optimizer_loss = []
         self.constraints_loss = []
 
+        stop_epoch = False
         for epoch in range(n_epochs):
             epoch_tot_loss = 0.0
             epoch_reco_loss = 0.0
@@ -175,12 +203,6 @@ class Optimizer(torch.nn.Module):
             epoch_surrogate_loss = 0.0
             epoch_boundaries_loss = 0.0
             epoch_constraints_loss = 0.0
-            stop_epoch = False
-
-            current_lr = lr * (1 - (1-end_factor) * epoch / n_epochs)
-
-            for param_group in self.optimizer.param_groups:
-                param_group['lr'] = current_lr
 
             for batch_idx, (_parameters, context, targets, classes, _reconstructed) in enumerate(data_loader):
                 context: torch.Tensor = context.to(self.device)
@@ -188,7 +210,11 @@ class Optimizer(torch.nn.Module):
                 classes : torch.Tensor = classes.to(self.device)
                 parameters_batch: torch.Tensor = self.parameter_module()
                 if dataset.normalize_parameters:
-                    parameters_batch = dataset.normalize_features(parameters_batch,index=0)
+                    parameters_batch = dataset.normalize_features(
+                        parameters_batch,
+                        index = 0,
+                        device = self.surrogate_model.device,
+                    )
 
                 surrogate_output = dataset.unnormalize_features(
                     self.surrogate_model.sample_forward(
@@ -198,24 +224,25 @@ class Optimizer(torch.nn.Module):
                         classes,
                     ),
                     index = 4,
+                    device = self.surrogate_model.device,
                 )
                 loss = torch.tensor([0.]).to(self.surrogate_model.device)
                 if dataset.reconstruction:
                     reco_loss = reconstruction_loss(
-                        dataset.unnormalize_features(targets, index=2),
+                        dataset.unnormalize_features(targets, index=2, device=self.surrogate_model.device),
                         surrogate_output[:,0:1],
                     ).mean()
-                    loss += reco_loss * alpha_reco
+                    loss += reco_loss * (1-alpha)
                     idx_first = 1
                 else:
                     reco_loss = None
                     idx_first = 0
                 if dataset.classification:
                     class_loss = classification_loss(
-                        dataset.unnormalize_features(classes, index=3),
+                        dataset.unnormalize_features(classes, index=3, device=self.surrogate_model.device),
                         surrogate_output[:,idx_first:],
                     ).mean()
-                    loss += class_loss * alpha_class
+                    loss += class_loss * alpha
                 else:
                     class_loss = None
 
@@ -232,7 +259,7 @@ class Optimizer(torch.nn.Module):
                 if torch.isnan(loss):
                     #logger.error("Optimizer: NaN loss, exiting.")
                     logger.error(f"Optimizer: NaN loss for {torch.isnan(loss).sum()} entries.")
-                    loss = torch.nan_to_num(loss,nan=0.)
+                    from IPython import embed; embed()
 
                     #self.optimizer.step()
                     #return self.parameter_dict, False
@@ -256,7 +283,7 @@ class Optimizer(torch.nn.Module):
 
                 if not self.check_parameters_are_local(
                     updated_parameters = self.parameter_module.continuous_tensors(),
-                    scale = scale,
+                    cutoff = cutoff,
                 ):
                     stop_epoch = True
                     logger.error("Optimizer: Parameters are not local")
@@ -272,8 +299,8 @@ class Optimizer(torch.nn.Module):
             self.constraints_loss.append(epoch_constraints_loss)
 
             logger.info(
-                f"Optimizer Epoch: {epoch:3d} LR = {current_lr:.5f} Loss: {epoch_surrogate_loss:.5f} (surrogate)\t"
-                + f"[= {alpha_reco:.5f} * {epoch_reco_loss:.5f} (reco) + {alpha_class:.5f} * {epoch_class_loss:.5f} (class)]\t"
+                f"Optimizer Epoch: {epoch:3d} LR = {self.learning_rate:.5f} Loss: {epoch_surrogate_loss:.5f} (surrogate)\t"
+                + f"[= {(1-alpha):.5f} * {epoch_reco_loss:.5f} (reco) + {alpha:.5f} * {epoch_class_loss:.5f} (class)]\t"
                 + f"+ {epoch_constraints_loss:.5f} (constraints)\t"
                 + f"+ {epoch_boundaries_loss:.5f} (boundaries)\t"
                 + f"= {epoch_tot_loss:.5f} (total)"
@@ -282,11 +309,14 @@ class Optimizer(torch.nn.Module):
             if stop_epoch:
                 break
 
+        self.scheduler.step(epoch_tot_loss)
+
         self.parameter_dict.covariance = self.parameter_module.adjust_covariance(
-            self.parameter_module.continuous_tensors().to(self.device)
-            - self.starting_parameters_continuous.to(self.device)
+            direction = self.parameter_module.continuous_tensors().to(self.device)
+            - self.starting_parameters_continuous.to(self.device),
+            min_scale = scale,
         ).astype(float)
-        return self.parameter_dict, True
+        return self.parameter_dict, stop_epoch
 
     @property
     def boosted_parameter_dict(self) -> SimulationParameterDictionary:

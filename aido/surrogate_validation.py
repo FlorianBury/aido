@@ -4,6 +4,7 @@ Generate plots to validate the surrogate model for the example "full_calorimeter
 import os
 from typing import Union
 
+import matplotlib
 import matplotlib.pyplot as plt
 from sklearn.metrics import roc_curve, auc
 import numpy as np
@@ -15,8 +16,7 @@ class SurrogateValidation():
             self,
             surrogate_model,
             ):
-        self.device = "cuda" if torch.cuda.is_available() else "cpu"
-        self.surrogate_model = surrogate_model.to(self.device)
+        self.surrogate_model = surrogate_model
 
     def validate(
             self,
@@ -42,13 +42,19 @@ class SurrogateValidation():
         cls,
         validation_df: pd.DataFrame,
         fig_savepath: Union[os.PathLike, str],
+        reconstruction_loss_function = None,
+        classification_loss_function = None,
     ) -> None:
         """ Plot the reconstructed 'true_energy'
         """
-        os.makedirs(os.path.dirname(fig_savepath), exist_ok=True)
+        if fig_savepath is not None:
+            os.makedirs(os.path.dirname(fig_savepath), exist_ok=True)
 
         ncols = len(validation_df['Surrogate'].columns)
-        fig, axs = plt.subplots(nrows=2,ncols=ncols,figsize=(ncols*5,8))
+        nrows = 3
+        if reconstruction_loss_function is not None or classification_loss_function is not None:
+            nrows = 4
+        fig, axs = plt.subplots(nrows=nrows,ncols=ncols,figsize=(ncols*5,nrows*4))
         plt.subplots_adjust(wspace=0.3,hspace=0.3)
         if not isinstance(axs,np.ndarray):
             axs = np.array([[axs]])
@@ -65,14 +71,14 @@ class SurrogateValidation():
             bins = np.linspace(0, max([true_energy.max(),validation_energy.max(),surrogate_energy.max()]), 50 + 1)
             axs[0,0].hist(
                 [validation_energy, surrogate_energy, true_energy],
-                bins=bins,
-                label=[
+                bins = bins,
+                label = [
                     r"$E_\text{reco}$" + " (Validation)",
                     r"$E'$" + " (Surrogate)",
                     r"$E_\text{true}$" + " (Simulation)",
                 ],
-                color=["orange", "royalblue", "forestgreen"],
-                histtype="step",
+                color = ["orange", "royalblue", "forestgreen"],
+                histtype = "step",
             )
             axs[0,0].legend()
             axs[0,0].set_xlabel("Initial Energy [GeV]")
@@ -84,16 +90,16 @@ class SurrogateValidation():
             # E/E_true comparison #
             validation_ratio = validation_energy / true_energy
             surrogate_ratio = surrogate_energy / true_energy
-            bins = np.linspace(0, max([validation_ratio.max(),surrogate_ratio.max()]), 40 + 1)
+            ratio_bins = np.linspace(0, max([validation_ratio.max(),surrogate_ratio.max()]), 40 + 1)
             axs[1,0].hist(
                 [validation_ratio, surrogate_ratio],
-                bins=bins,
-                label=[
+                bins = ratio_bins,
+                label = [
                     r"$E_\text{reco}$" + " (Validation)",
                     r"$E'$" + " (Surrogate)",
                 ],
-                color=["orange", "royalblue"],
-                histtype="step",
+                color = ["orange", "royalblue"],
+                histtype = "step",
             )
             axs[1,0].legend()
             axs[1,0].set_xlabel(r"$\frac{E_{reco}}{E_{true}}$")
@@ -101,6 +107,55 @@ class SurrogateValidation():
             axs[1,0].set_yscale('log')
             ylim_min,ylim_max = axs[1,0].get_ylim()
             axs[1,0].set_ylim(1e-1,ylim_max*20)
+
+            # 2D comparison
+            H = axs[2,0].hist2d(
+                validation_energy,
+                surrogate_energy,
+                bins = bins,
+                norm = matplotlib.colors.LogNorm(vmin=1e-1),
+            )
+            axs[2,0].plot(
+                [bins[0],bins[-1]],
+                [bins[0],bins[-1]],
+                linestyle = '--',
+                color = 'r',
+            )
+            axs[2,0].set_xlabel('Validation energy')
+            axs[2,0].set_ylabel('Surrogate energy')
+            plt.colorbar(H[3],ax=axs[2,0])
+
+            if reconstruction_loss_function is not None:
+                validation_loss = reconstruction_loss_function(
+                    torch.tensor(true_energy),
+                    torch.tensor(validation_energy),
+                )
+                surrogate_loss = reconstruction_loss_function(
+                    torch.tensor(true_energy),
+                    torch.tensor(surrogate_energy),
+                )
+                bins = np.logspace(
+                    np.log10(min(validation_loss.min(),surrogate_loss.min())),
+                    np.log10(max(validation_loss.max(),surrogate_loss.max())),
+                    50,
+                )
+                H = axs[3,0].hist2d(
+                    validation_loss,
+                    surrogate_loss,
+                    bins = bins,
+                    norm = matplotlib.colors.LogNorm(vmin=1e-1),
+                )
+                axs[3,0].plot(
+                    [bins[0],bins[-1]],
+                    [bins[0],bins[-1]],
+                    linestyle = '--',
+                    color = 'r',
+                )
+                axs[3,0].set_xscale('log')
+                axs[3,0].set_yscale('log')
+                axs[3,0].set_xlabel('Validation reco loss')
+                axs[3,0].set_ylabel('Surrogate reco loss')
+                plt.colorbar(H[3],ax=axs[3,0])
         else:
             idx_first_plot = 0
 
@@ -192,11 +247,82 @@ class SurrogateValidation():
                 axs[1,j].set_ylim(0,1)
                 axs[1,j].set_yscale('symlog',linthresh=1e-4)
 
+                # 2D comparison
+                H = axs[2,j].hist2d(
+                    validation_logits,
+                    surrogate_logits,
+                    bins = bins,
+                    norm = matplotlib.colors.LogNorm(vmin=1e-1),
+                )
+                axs[2,j].plot(
+                    [bins[0],bins[-1]],
+                    [bins[0],bins[-1]],
+                    linestyle = '--',
+                    color = 'r',
+                )
+                axs[2,j].set_xlabel(f'Validation logits (class {name})')
+                axs[2,j].set_ylabel(f'Surrogate logits (class {name})')
+                plt.colorbar(H[3],ax=axs[2,j])
+
+            if classification_loss_function is not None:
+                true_classes = torch.tensor(validation_df["Classes"][columns].values * 1.)
+                validation_logits = torch.tensor(validation_df["Reconstructed"][
+                    [
+                        f"true_logits_{i}"
+                        for i in range(len(columns))
+                    ]
+                ].values)
+                surrogate_logits = torch.tensor(
+                    validation_df["Surrogate"][
+                    [
+                        f"true_logits_{i}"
+                        for i in range(len(columns))
+                    ]
+                ].values)
+                validation_loss = classification_loss_function(
+                    true_classes,
+                    validation_logits,
+                    multiclass = False,
+                )
+                surrogate_loss = classification_loss_function(
+                    true_classes,
+                    surrogate_logits,
+                    multiclass = False,
+                )
+                bins = np.logspace(
+                    np.log10(
+                        min(
+                            validation_loss[validation_loss>0].min(),
+                            surrogate_loss[surrogate_loss>0].min(),
+                        )),
+                    np.log10(max(validation_loss.max(),surrogate_loss.max())),
+                    50,
+                )
+                H = axs[3,1].hist2d(
+                    validation_loss.ravel(),
+                    surrogate_loss.ravel(),
+                    bins = bins,
+                    norm = matplotlib.colors.LogNorm(vmin=1e-1),
+                )
+                axs[3,1].plot(
+                    [bins[0],bins[-1]],
+                    [bins[0],bins[-1]],
+                    linestyle = '--',
+                    color = 'r',
+                )
+                axs[3,1].set_xscale('log')
+                axs[3,1].set_yscale('log')
+                axs[3,1].set_xlabel('Validation class loss')
+                axs[3,1].set_ylabel('Surrogate class loss')
+                plt.colorbar(H[3],ax=axs[3,1])
+
+
 
 
         plt.tight_layout()
-        plt.savefig(fig_savepath,dpi=600)
-        print (f'Surrogate validation plot saved in {fig_savepath}')
+        if fig_savepath is not None:
+            plt.savefig(fig_savepath,dpi=600)
+            print (f'Surrogate validation plot saved in {fig_savepath}')
 
 
     if __name__ == "__main__":

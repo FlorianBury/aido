@@ -141,9 +141,9 @@ class Plotting:
         files.sort(key=lambda x: int(re.search(r"optimizer_loss_(\d+)", x).group(1)))
 
         for i, file_name in enumerate(files):
-            df_i = pd.read_csv(file_name, names=["Epoch", "Loss"], dtype="float32", header=1)
+            df_i = pd.read_csv(file_name, names=["Epoch", "Loss", "LR"], dtype="float32", header=0)
             df_i["Iteration"] = i
-            df_i["Scaled Epoch"] = np.linspace(i, i + 1, len(df_i))
+            df_i["Scaled Epoch"] = np.linspace(i, i + 0.99, len(df_i))
 
             df_loss_list.append(df_i)
 

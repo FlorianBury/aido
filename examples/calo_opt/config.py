@@ -5,7 +5,7 @@ from typing import Any, Dict, List, Tuple
 @dataclass
 class ReconstructionConfig:
     retrain: bool = False
-    momentum: float = 0.1
+    momentum: float = 0.01
     n_epochs_pre: int = 50
     n_epochs_main: int = 50
     batch_size: int = 512
@@ -19,7 +19,7 @@ class ReconstructionConfig:
 @dataclass
 class ClassificationConfig:
     retrain: bool = False
-    momentum: float = 0.1
+    momentum: float = 0.01
     n_epochs_pre: int = 20
     n_epochs_main: int = 20
     batch_size: int = 512

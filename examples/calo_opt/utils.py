@@ -14,7 +14,7 @@ class LossPlotting:
         else:
             self.log[key].append(value)
 
-    def plot(self,path):
+    def plot(self,path=None):
         fig,ax1 = plt.subplots(figsize=(6,5))
         ax2 = ax1.twinx()
         colors = plt.cm.Set1(np.linspace(0, 1, len(self.log)))
@@ -45,8 +45,11 @@ class LossPlotting:
         ax1.set_yscale('log')
         ax2.set_yscale('log')
 
-        fig.savefig(path)
-        print (f"Loss curves saved as {path}")
+        if path is None:
+            plt.show()
+        else:
+            fig.savefig(path)
+            print (f"Loss curves saved as {path}")
 
 
 class EarlyStopping:

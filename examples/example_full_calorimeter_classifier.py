@@ -69,7 +69,7 @@ if __name__ == "__main__":
     ui_interface.container_extra_flags = ""
     #ui_interface.container_extra_flags = "-B /software,/cephfs"
     ui_interface.verbose = True
-    results_dir: str = "/cephfs/dice/users/lw23382/AIDO/aido_binary_reg_lambda_2_v1"
+    results_dir: str = "/cephfs/dice/users/lw23382/AIDO/aido_binary_reg_alpha_1p0_v1_replay"
 
     # Non optimizable #
     parameters = [
@@ -147,7 +147,7 @@ if __name__ == "__main__":
         parameters=aido.SimulationParameterDictionary(parameters),
         user_interface=ui_interface,
         simulation_tasks=20,
-        max_iterations=100,
+        max_iterations=200,
         threads=20,
         results_dir=results_dir,
         description="""
